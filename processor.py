@@ -98,7 +98,16 @@ def summarise(transcript: str, screen: str) -> dict:
                     .replace("<<SCREEN>>", screen or "(no on-screen text)"))
     resp = requests.post(
         f"{OLLAMA_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "format": "json"},
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.2,  # low = consistent notes for the same reel
+                "num_ctx": 8192,     # room for long transcripts + on-screen text
+            },
+        },
         timeout=600,
     )
     resp.raise_for_status()
@@ -200,15 +209,52 @@ def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
     return save_note(data, transcript, screen, source), data
 
 
-def open_actions() -> list[tuple[str, str]]:
-    """Find every unticked '- [ ]' action across all notes."""
+def normalise_url(url: str) -> str:
+    """Same reel = same URL, ignoring ?igsh=... tracking bits and trailing slash."""
+    return url.split("?")[0].split("#")[0].rstrip("/").lower()
+
+
+def find_note_by_source(url: str) -> Path | None:
+    """Return the existing note for this reel link, if we already made one."""
+    if not url or not NOTES_DIR.exists():
+        return None
+    target = normalise_url(url)
+    for note in sorted(NOTES_DIR.glob("*.md")):
+        for line in note.read_text(encoding="utf-8").splitlines()[:8]:
+            if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
+                return note
+    return None
+
+
+def open_actions() -> list[dict]:
+    """Every unticked '- [ ]' action across all notes, in a stable numbered order.
+
+    New notes sort after old ones (file names start with the date),
+    so existing numbers don't shift when you add a reel.
+    """
     results = []
     if not NOTES_DIR.exists():
         return results
     for note in sorted(NOTES_DIR.glob("*.md")):
-        text = note.read_text(encoding="utf-8")
-        title = text.splitlines()[0].lstrip("# ").strip() if text else note.stem
-        for line in text.splitlines():
+        lines = note.read_text(encoding="utf-8").splitlines()
+        title = lines[0].lstrip("# ").strip() if lines else note.stem
+        for i, line in enumerate(lines):
             if line.startswith("- [ ] "):
-                results.append((title, line[6:].strip()))
+                results.append({"path": note, "line": i, "title": title,
+                                "action": line[6:].strip()})
     return results
+
+
+def complete_actions(numbers: list[int]) -> list[str]:
+    """Tick off actions by their /todo number. Returns the texts that were ticked."""
+    actions = open_actions()
+    chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
+    by_file: dict[Path, list[int]] = {}
+    for a in chosen:
+        by_file.setdefault(a["path"], []).append(a["line"])
+    for path, line_nos in by_file.items():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i in line_nos:
+            lines[i] = lines[i].replace("- [ ] ", "- [x] ", 1)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [a["action"] for a in chosen]
