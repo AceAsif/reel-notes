@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import os
+import re
 import tempfile
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -49,8 +50,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
-        "Send me a reel video (add the reel link as the caption if you like) "
-        "and I'll turn it into a note.\n/todo shows your open action items."
+        "Send me a reel link or a reel video and I'll turn it into a note.\n"
+        "/todo shows your open action items."
     )
 
 
@@ -75,6 +76,32 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
     except Exception as exc:  # show the error so you can fix it
         await status.edit_text(f"❌ Something went wrong: {exc}")
+        return
+
+    await status.edit_text(format_reply(data, note_path))
+
+
+LINK_PATTERN = r"https?://\S*(instagram\.com|facebook\.com|fb\.watch)\S*"
+
+
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """You paste a reel link; the bot downloads it and makes the note."""
+    if not is_allowed(update):
+        return
+    msg = update.message
+    url = re.search(LINK_PATTERN, msg.text).group(0)
+
+    status = await msg.reply_text("Got the link ⏳ Downloading and processing...")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = await asyncio.to_thread(processor.download_reel, url, Path(tmp))
+            note_path, data = await asyncio.to_thread(processor.process_video, video_path, url)
+    except Exception as exc:
+        await status.edit_text(
+            f"❌ Something went wrong: {exc}\n\n"
+            "If it's a login/cookies error, see COOKIES_FILE in .env, "
+            "or send me the video file instead."
+        )
         return
 
     await status.edit_text(format_reply(data, note_path))
@@ -107,6 +134,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 
     if ALLOWED_USER_ID:
         # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)

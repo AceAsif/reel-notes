@@ -168,6 +168,29 @@ def save_note(data: dict, transcript: str, screen: str, source: str) -> Path:
     return path
 
 
+def download_reel(url: str, workdir: Path) -> Path:
+    """Download a reel from a link with yt-dlp. Returns the video file path."""
+    import yt_dlp
+
+    opts = {
+        "outtmpl": str(workdir / "reel.%(ext)s"),
+        "format": "bv*+ba/b",           # best video + audio, merged by ffmpeg
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    # Instagram often needs you logged in: export cookies to a cookies.txt file
+    if os.getenv("COOKIES_FILE"):
+        opts["cookiefile"] = os.getenv("COOKIES_FILE")
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.extract_info(url, download=True)
+    files = sorted(workdir.glob("reel.*"))
+    if not files:
+        raise RuntimeError("Download finished but no video file was found.")
+    return files[0]
+
+
 def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
     """Full pipeline. Returns the note path and the structured data."""
     with tempfile.TemporaryDirectory() as tmp:
