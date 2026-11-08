@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import pytesseract
 import requests
@@ -76,9 +77,12 @@ Return ONLY a JSON object with these keys:
 - "summary": 2-3 sentences
 - "key_points": list of 3-5 short strings
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
-  library or command mentioned. Fix obvious OCR typos. Use "" for link if no URL was shown.
+  library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
+  shown or said; never invent one. Use "" for link otherwise (never "N/A").
 - "action_items": list of short, concrete things I should do (start each with a verb,
-  e.g. "Star and try the repo X", "Install Y and test it on my project")
+  e.g. "Find the Strix GitHub repo and read its README", "Test X on one of my own projects").
+  Only include actions supported by the video. If the video makes big claims
+  (free tokens, "official", etc.), add one action to verify the claim first.
 
 TRANSCRIPT:
 <<TRANSCRIPT>>
@@ -112,6 +116,17 @@ def summarise(transcript: str, screen: str) -> dict:
     return data
 
 
+def resource_line(r) -> str:
+    """Name + link. If the model gave no real URL, add a GitHub search link."""
+    if not isinstance(r, dict):
+        return str(r)
+    name = str(r.get("name", "")).strip()
+    link = str(r.get("link", "")).strip()
+    if not link.lower().startswith("http"):
+        link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
+    return f"{name} {link}".strip()
+
+
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50] or "reel"
 
@@ -136,12 +151,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str) -> Path:
         "",
         "## Resources",
     ]
-    for r in data["resources"]:
-        if isinstance(r, dict):
-            name, link = r.get("name", ""), r.get("link", "")
-            lines.append(f"- {name} {link}".rstrip())
-        else:
-            lines.append(f"- {r}")
+    lines += [f"- {resource_line(r)}" for r in data["resources"]]
     lines += [
         "",
         "## Action items",
