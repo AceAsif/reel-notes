@@ -40,6 +40,9 @@ Reel video ───────────────────────
 | `/start` | Shows your Telegram user ID |
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
+| `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
+| `/notes` | Lists your 10 newest notes |
+| `/note 1` | Opens note 1 from your last `/search` or `/notes` (without the transcript) |
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
 

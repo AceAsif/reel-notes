@@ -53,7 +53,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel link or a reel video and I'll turn it into a note.\n"
-        "/todo shows your open action items, /done 2 ticks one off."
+        "/todo shows your open action items, /done 2 ticks one off.\n"
+        "/search strix finds notes, /notes lists the latest, /note 1 opens one."
     )
 
 
@@ -170,6 +171,63 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(reply))
 
 
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/search strix   or   /search claude memory  (all words must match)."""
+    if not is_allowed(update):
+        return
+    query = " ".join(context.args or []).strip()
+    if not query:
+        await update.message.reply_text("Usage: /search strix  (or several words: /search claude memory)")
+        return
+    results = processor.search_notes(query)
+    if not results:
+        await update.message.reply_text(f"🔍 No notes found for \"{query}\".")
+        return
+    # Remember results so /note 2 opens the 2nd one
+    context.user_data["last_results"] = [str(r["path"]) for r in results]
+    lines = [f"🔍 {len(results)} note(s) for \"{query}\":", ""]
+    for n, r in enumerate(results, start=1):
+        lines.append(f"{n}. {r['title']}  ({r['date']})")
+        if r["snippet"]:
+            lines.append(f"    “{r['snippet']}”")
+    lines += ["", "Open one with /note 1"]
+    await update.message.reply_text("\n".join(lines)[:4000])
+
+
+async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/note 2 shows the 2nd note from your last /search (or /notes)."""
+    if not is_allowed(update):
+        return
+    paths = context.user_data.get("last_results", [])
+    numbers = re.findall(r"\d+", " ".join(context.args or []))
+    if not numbers or not paths:
+        await update.message.reply_text("Use /search or /notes first, then /note 1")
+        return
+    n = int(numbers[0])
+    if not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
+        await update.message.reply_text("No note with that number. Run /search or /notes again.")
+        return
+    await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
+
+
+async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/notes shows your 10 newest notes."""
+    if not is_allowed(update):
+        return
+    files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
+        if processor.NOTES_DIR.exists() else []
+    if not files:
+        await update.message.reply_text("No notes yet. Send me a reel!")
+        return
+    context.user_data["last_results"] = [str(f) for f in files]
+    lines = ["🗂 Your latest notes:", ""]
+    for n, f in enumerate(files, start=1):
+        title = f.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+        lines.append(f"{n}. {title}  ({f.name[:10]})")
+    lines += ["", "Open one with /note 1"]
+    await update.message.reply_text("\n".join(lines))
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id, text="📅 Weekly review\n\n" + actions_text()
@@ -181,6 +239,9 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("done", done))
+    app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("note", note))
+    app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 

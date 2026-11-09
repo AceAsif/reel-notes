@@ -284,6 +284,56 @@ def open_actions() -> list[dict]:
     return results
 
 
+SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
+                  "Action items": 2, "Transcript": 1, "On-screen text": 1}
+
+
+def search_notes(query: str, limit: int = 15) -> list[dict]:
+    """Find notes containing ALL words in the query (case-insensitive).
+
+    Matches in the title/key points rank higher than matches in the transcript.
+    Returns newest first among equal scores.
+    """
+    words = [w for w in query.lower().split() if w]
+    if not words or not NOTES_DIR.exists():
+        return []
+    results = []
+    for note in NOTES_DIR.glob("*.md"):
+        lines = note.read_text(encoding="utf-8").splitlines()
+        if not words or not all(w in "\n".join(lines).lower() for w in words):
+            continue
+        title = lines[0].lstrip("# ").strip() if lines else note.stem
+        score, snippet, section = 0, "", "title"
+        for line in lines:
+            if line.startswith("## "):
+                section = line[3:].strip()
+                continue
+            low = line.lower()
+            hits = sum(w in low for w in words)
+            if hits:
+                score += hits * SECTION_WEIGHT.get(section, 1)
+                if not snippet and section != "title":
+                    snippet = make_snippet(line, words[0])
+        results.append({"path": note, "title": title, "date": note.name[:10],
+                        "snippet": snippet, "score": score})
+    results.sort(key=lambda r: (r["score"], r["path"].name), reverse=True)
+    return results[:limit]
+
+
+def make_snippet(line: str, word: str, width: int = 110) -> str:
+    """A short piece of the line around the matched word."""
+    line = line.lstrip("- ").replace("[ ] ", "").replace("[x] ", "")
+    i = max(line.lower().find(word) - width // 3, 0)
+    piece = line[i:i + width].strip()
+    return ("…" if i > 0 else "") + piece + ("…" if i + width < len(line) else "")
+
+
+def note_summary_text(path: Path) -> str:
+    """The note without the long Transcript / On-screen text sections."""
+    text = path.read_text(encoding="utf-8")
+    return text.split("\n## Transcript")[0].strip()
+
+
 def complete_actions(numbers: list[int]) -> list[str]:
     """Tick off actions by their /todo number. Returns the texts that were ticked."""
     actions = open_actions()
