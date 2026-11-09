@@ -87,7 +87,10 @@ Return ONLY a JSON object with these keys:
 - "title": short title (max 8 words)
 - "category": one of "motivation", "tech", "programming", "other"
 - "summary": 2-3 sentences
-- "key_points": list of 3-5 short strings
+- "key_points": list of 4-7 specific, self-contained points. Someone who never watched
+  the video must be able to USE them. Keep the actual details: exact questions,
+  steps, commands, numbers, research findings, names, and WHY it works.
+  Bad: "Ask about favorite memories". Good: "Ask: 'What is your favourite memory?'"
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
@@ -134,17 +137,38 @@ def summarise(transcript: str, screen: str) -> dict:
     data.setdefault("key_points", [])
     data.setdefault("resources", [])
     data.setdefault("action_items", [])
+    data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
     return data
 
 
-def resource_line(r) -> str:
-    """Name + link. If the model gave no real URL, add a GitHub search link."""
+def drop_invented_links(resources: list, source_text: str) -> list:
+    """Remove URLs whose website never appeared in the video (the AI made them up).
+
+    The resource stays; resource_line() then adds a search link instead.
+    """
+    squashed = re.sub(r"\s+", "", source_text.lower())  # OCR often splits URLs
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        link = str(r.get("link", "")).strip()
+        domain = re.sub(r"^https?://(www\.)?", "", link.lower()).split("/")[0]
+        if domain and domain not in squashed:
+            r["link"] = ""
+    return resources
+
+
+def resource_line(r, category: str = "") -> str:
+    """Name + link. If there's no real URL, add a search link:
+    GitHub for tech/programming reels, Google for everything else."""
     if not isinstance(r, dict):
         return str(r)
     name = str(r.get("name", "")).strip()
     link = str(r.get("link", "")).strip()
     if not link.lower().startswith("http"):
-        link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
+        if category in ("tech", "programming"):
+            link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
+        else:
+            link = "https://www.google.com/search?q=" + quote_plus(name)
     return f"{name} {link}".strip()
 
 
@@ -174,7 +198,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         "",
         "## Resources",
     ]
-    lines += [f"- {resource_line(r)}" for r in data["resources"]]
+    lines += [f"- {resource_line(r, data['category'])}" for r in data["resources"]]
     lines += [
         "",
         "## Action items",

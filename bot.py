@@ -41,7 +41,7 @@ def format_reply(data: dict, note_path: Path) -> str:
         parts += ["", "Key points:", *[f"• {p}" for p in data["key_points"]]]
     if data["resources"]:
         parts += ["", "Resources:"]
-        parts += [f"• {processor.resource_line(r)}" for r in data["resources"]]
+        parts += [f"• {processor.resource_line(r, data['category'])}" for r in data["resources"]]
     if data["action_items"]:
         parts += ["", "✅ Action items:", *[f"☐ {a}" for a in data["action_items"]]]
     parts += ["", f"Saved: {note_path.name}"]
