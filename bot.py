@@ -34,7 +34,9 @@ def is_allowed(update: Update) -> bool:
 
 
 def format_reply(data: dict, note_path: Path) -> str:
-    parts = [f"📝 {data['title']}  [{data['category']}]", "", data["summary"]]
+    lang = data.get("language", "en")
+    lang_tag = f"  🌐 {lang}→en" if lang != "en" else ""
+    parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}", "", data["summary"]]
     if data["key_points"]:
         parts += ["", "Key points:", *[f"• {p}" for p in data["key_points"]]]
     if data["resources"]:

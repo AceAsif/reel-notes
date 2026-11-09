@@ -40,10 +40,19 @@ def get_whisper() -> WhisperModel:
     return _whisper
 
 
-def transcribe(video: Path) -> str:
-    """Speech to text. faster-whisper reads the audio straight from the video."""
-    segments, _info = get_whisper().transcribe(str(video), vad_filter=True)
-    return " ".join(seg.text.strip() for seg in segments).strip()
+def transcribe(video: Path) -> tuple[str, str]:
+    """Speech to English text. Returns (transcript, detected language code).
+
+    English reels are transcribed as-is. Other languages (Hindi, Bengali, ...)
+    are translated to English by Whisper while transcribing.
+    """
+    model = get_whisper()
+    # Language is detected up front; the segments are only computed if we read them
+    segments, info = model.transcribe(str(video), vad_filter=True)
+    language = info.language or "en"
+    if language != "en":
+        segments, _ = model.transcribe(str(video), vad_filter=True, task="translate")
+    return " ".join(seg.text.strip() for seg in segments).strip(), language
 
 
 def screen_text(video: Path, workdir: Path) -> str:
@@ -70,6 +79,9 @@ def screen_text(video: Path, workdir: Path) -> str:
 
 PROMPT = """You turn short social media videos (motivation, tech, programming) into useful notes.
 Below is the spoken transcript and the text that appeared on screen (from OCR, so it may have typos).
+
+Always write every field in English, even if the transcript or on-screen text
+is in another language (e.g. Hindi or Hinglish); translate as needed.
 
 Return ONLY a JSON object with these keys:
 - "title": short title (max 8 words)
@@ -140,7 +152,8 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50] or "reel"
 
 
-def save_note(data: dict, transcript: str, screen: str, source: str) -> Path:
+def save_note(data: dict, transcript: str, screen: str, source: str,
+              language: str = "en") -> Path:
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
     path = NOTES_DIR / f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
@@ -151,6 +164,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str) -> Path:
         f"- Date: {now:%Y-%m-%d %H:%M}",
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
+        f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
         "",
         "## Summary",
         data["summary"],
@@ -203,10 +217,11 @@ def download_reel(url: str, workdir: Path) -> Path:
 def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
     """Full pipeline. Returns the note path and the structured data."""
     with tempfile.TemporaryDirectory() as tmp:
-        transcript = transcribe(video)
+        transcript, language = transcribe(video)
         screen = screen_text(video, Path(tmp))
     data = summarise(transcript, screen)
-    return save_note(data, transcript, screen, source), data
+    data["language"] = language
+    return save_note(data, transcript, screen, source, language), data
 
 
 def normalise_url(url: str) -> str:
