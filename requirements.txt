@@ -5,3 +5,4 @@ requests>=2.31
 python-dotenv>=1.0
 av>=12,<14
 yt-dlp
+pystray

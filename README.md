@@ -84,7 +84,13 @@ python bot.py
 
 The first time, send `/start` to the bot, put your user ID in `.env` as `ALLOWED_USER_ID`, and restart. After that, only you can use the bot.
 
-The bot only works while `python bot.py` is running. Messages sent while it's off wait on Telegram for up to 24 hours and are processed when it starts again.
+### Run in the background with a tray icon (Windows)
+
+Double-click `start_bot_hidden.vbs`. A coloured **R** icon appears next to the clock: green = running, yellow = starting, red = stopped. Right-click it to open notes, open the log, restart, stop or quit. It restarts the bot automatically if it crashes, and output goes to `bot.log`.
+
+To start it at login, put a shortcut to `start_bot_hidden.vbs` in the Startup folder (`Win+R` → `shell:startup`). `stop_bot.bat` force-stops everything if the icon isn't responding.
+
+The bot only works while it is running. Messages sent while it's off wait on Telegram for up to 24 hours and are processed when it starts again.
 
 ## Settings (`.env`)
 
