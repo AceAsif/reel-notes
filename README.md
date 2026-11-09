@@ -135,6 +135,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `tesseract not found` | Set `TESSERACT_CMD` in `.env` |
 | Bot stops right after "Bot is running" | Check `.env` exists and the token is correct |
 | `.bat` / `.vbs` file blocked by Windows ("Smart App Control has blocked...") | See below |
+| `NetworkError: Bad Gateway` / `TimedOut` in `bot.log` | Telegram's servers had a short outage. Nothing to fix: the bot retries automatically. If a reel got no reply, send the link again |
 | Two bots running → Telegram "Conflict" error | Quit the tray icon or run `stop_bot.bat`, then start only one |
 | Downloaded `.env.example` / `.gitignore` lost the dot | `Move-Item env.example .env.example -Force` (same for `gitignore`) |
 

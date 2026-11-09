@@ -226,6 +226,7 @@ def download_reel(url: str, workdir: Path) -> Path:
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,             # no [download] lines filling bot.log
     }
     # Instagram often needs you logged in: export cookies to a cookies.txt file
     if os.getenv("COOKIES_FILE"):

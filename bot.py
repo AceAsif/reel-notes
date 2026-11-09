@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import tempfile
+import traceback
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before importing processor so it sees .env values
 
 from telegram import Update  # noqa: E402
+from telegram.error import NetworkError, TimedOut  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
     CommandHandler,
@@ -234,8 +236,21 @@ async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Short one-line log for Telegram hiccups (Bad Gateway, timeouts);
+    full details only for real bugs. The bot keeps running either way."""
+    err = context.error
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(err, (NetworkError, TimedOut)):
+        print(f"[{stamp}] Telegram network hiccup ({err}), retrying automatically")
+    else:
+        print(f"[{stamp}] Error: {err!r}")
+        traceback.print_exception(err)
+
+
 def main() -> None:
     app = Application.builder().token(TOKEN).build()
+    app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("done", done))
