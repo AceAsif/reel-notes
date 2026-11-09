@@ -86,9 +86,18 @@ The first time, send `/start` to the bot, put your user ID in `.env` as `ALLOWED
 
 ### Run in the background with a tray icon (Windows)
 
-Double-click `start_bot_hidden.vbs`. A coloured **R** icon appears next to the clock: green = running, yellow = starting, red = stopped. Right-click it to open notes, open the log, restart, stop or quit. It restarts the bot automatically if it crashes, and output goes to `bot.log`.
+`tray.py` runs the bot in the background and shows a coloured **R** icon next to the clock: green = running, yellow = starting, red = stopped. Right-click it to open notes, open the log, restart, stop or quit. It restarts the bot automatically if it crashes, and output goes to `bot.log`.
 
-To start it at login, put a shortcut to `start_bot_hidden.vbs` in the Startup folder (`Win+R` → `shell:startup`). `stop_bot.bat` force-stops everything if the icon isn't responding.
+**Create a shortcut** (works with Windows Smart App Control, unlike `.bat`/`.vbs` launchers):
+
+1. Desktop → right-click → **New → Shortcut**, and use this target:
+   ```
+   "D:\Python projects\reel-notes\.venv\Scripts\pythonw.exe" "D:\Python projects\reel-notes\tray.py"
+   ```
+2. Name it `Reel Notes bot`, then in **Properties → Start in**, enter `"D:\Python projects\reel-notes"`.
+3. Double-click to test. To start it at login, move the shortcut to the Startup folder (`Win+R` → `shell:startup`).
+
+`pythonw.exe` runs Python without a console window. To stop everything, use the tray icon (**Quit**) or `stop_bot.bat`.
 
 The bot only works while it is running. Messages sent while it's off wait on Telegram for up to 24 hours and are processed when it starts again.
 
@@ -122,3 +131,30 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | Hugging Face symlink warnings | Harmless. Add `HF_HUB_DISABLE_SYMLINKS_WARNING=1` to `.env` |
 | `tesseract not found` | Set `TESSERACT_CMD` in `.env` |
 | Bot stops right after "Bot is running" | Check `.env` exists and the token is correct |
+| `.bat` / `.vbs` file blocked by Windows ("Smart App Control has blocked...") | See below |
+| Two bots running → Telegram "Conflict" error | Quit the tray icon or run `stop_bot.bat`, then start only one |
+| Downloaded `.env.example` / `.gitignore` lost the dot | `Move-Item env.example .env.example -Force` (same for `gitignore`) |
+
+### Windows Smart App Control blocking scripts
+
+When you download a file, Windows attaches a hidden label to it called the **Mark of the Web**, stored in a hidden part of the file named `Zone.Identifier`. Smart App Control blocks downloaded script files such as `.bat`, `.cmd` and `.vbs` that carry this label.
+
+Check whether a file has the label:
+
+```powershell
+Get-Content "D:\Python projects\reel-notes\stop_bot.bat" -Stream Zone.Identifier
+```
+
+`ZoneId=3` means the file came from the internet, and `HostUrl` shows where it was downloaded from.
+
+**Fix for your own, trusted files:** remove the label.
+
+```powershell
+Unblock-File "D:\Python projects\reel-notes\stop_bot.bat"
+```
+
+(This is the same as ticking **Unblock** in the file's Properties.)
+
+- Only unblock files you have read and trust. The label protects you from malware.
+- **Don't turn off Smart App Control.** Once it's off, Windows can't turn it back on without a reset.
+- Shortcuts you create yourself never get the label, and `pythonw.exe` is a signed program, so the tray shortcut above is never blocked.
