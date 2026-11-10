@@ -49,6 +49,8 @@ def transcribe(video: Path) -> tuple[str, str]:
     English reels are transcribed as-is. Other languages (Hindi, Bengali, ...)
     are translated to English by Whisper while transcribing.
     """
+    if not has_audio(video):
+        return "", "en"   # silent clip (or a photo slide): nothing to transcribe
     model = get_whisper()
     # Language is detected up front; the segments are only computed if we read them
     segments, info = model.transcribe(str(video), vad_filter=True)
@@ -56,6 +58,17 @@ def transcribe(video: Path) -> tuple[str, str]:
     if language != "en":
         segments, _ = model.transcribe(str(video), vad_filter=True, task="translate")
     return " ".join(seg.text.strip() for seg in segments).strip(), language
+
+
+def has_audio(video: Path) -> bool:
+    """True if the video file has a sound track. Silent clips would otherwise
+    crash Whisper with 'tuple index out of range'."""
+    import av
+    try:
+        with av.open(str(video)) as container:
+            return len(container.streams.audio) > 0
+    except Exception:
+        return False
 
 
 def screen_text(video: Path, workdir: Path) -> str:
@@ -360,7 +373,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         transcript or "(no speech)",
         "",
         "## On-screen text",
-        screen or "(none)",
+        *fenced(screen or "(none)"),
         "",
     ]
     if caption:
@@ -422,12 +435,19 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "") -> t
     transcripts, screens, languages = [], [], []
     with tempfile.TemporaryDirectory() as tmp:
         for i, video in enumerate(videos[:MAX_VIDEOS], start=1):
-            text, lang = transcribe(video)
             workdir = Path(tmp) / f"v{i}"
             workdir.mkdir()
+            try:
+                text, lang = transcribe(video)
+                screen = screen_text(video, workdir)
+            except Exception as exc:   # one broken video shouldn't stop the whole post
+                print(f"Skipping video {i} ({video.name}): {exc!r}")
+                continue
             transcripts.append(text)
-            screens.append(screen_text(video, workdir))
+            screens.append(screen)
             languages.append(lang)
+    if not transcripts:
+        raise RuntimeError("None of the videos in this post could be processed.")
 
     if len(transcripts) == 1:
         transcript, screen = transcripts[0], screens[0]
@@ -467,6 +487,15 @@ def find_note_by_source(url: str) -> Path | None:
     return None
 
 
+def fenced(text: str) -> list[str]:
+    """Wrap raw OCR text in a code block so stray symbols ('* ', '| ', '---')
+    aren't read as Markdown lists/tables/headings. The fence is longer than any
+    run of backticks in the text, so the text can never close it early."""
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [fence + "text", text, fence]
+
+
 def open_actions() -> list[dict]:
     """Every unticked '- [ ]' action across all notes, in a stable numbered order.
 
@@ -479,8 +508,12 @@ def open_actions() -> list[dict]:
     for note in sorted(NOTES_DIR.glob("*.md")):
         lines = note.read_text(encoding="utf-8").splitlines()
         title = lines[0].lstrip("# ").strip() if lines else note.stem
+        section = ""
         for i, line in enumerate(lines):
-            if line.startswith("- [ ] "):
+            if line.startswith("## "):
+                section = line[3:].strip()
+            # Only real action items count, not "- [ ]" text inside a transcript/caption
+            elif section == "Action items" and line.startswith("- [ ] "):
                 results.append({"path": note, "line": i, "title": title,
                                 "action": line[6:].strip()})
     return results
