@@ -86,6 +86,10 @@ is in another language (e.g. Hindi or Hinglish); translate as needed.
 Return ONLY a JSON object with these keys:
 - "title": short title (max 8 words)
 - "category": one of "motivation", "tech", "programming", "other"
+- "tags": list of 3-6 short topic tags, lowercase, words joined with "-", no "#".
+  Prefer common, reusable tags so notes group well, e.g. "python", "ai-tools",
+  "github", "claude", "productivity", "communication", "career", "security".
+  <<EXISTING_TAGS>>
 - "summary": 2-3 sentences
 - "key_points": list of 4-7 specific, self-contained points. Someone who never watched
   the video must be able to USE them. Keep the actual details: exact questions,
@@ -107,10 +111,8 @@ ON-SCREEN TEXT:
 """
 
 
-def summarise(transcript: str, screen: str) -> dict:
-    """Ask the local Ollama model for a structured note."""
-    prompt = (PROMPT.replace("<<TRANSCRIPT>>", transcript or "(no speech)")
-                    .replace("<<SCREEN>>", screen or "(no on-screen text)"))
+def ask_ollama_json(prompt: str) -> dict:
+    """Send a prompt to the local Ollama model and get a JSON object back."""
     resp = requests.post(
         f"{OLLAMA_URL}/api/generate",
         json={
@@ -130,6 +132,31 @@ def summarise(transcript: str, screen: str) -> dict:
         data = json.loads(resp.json()["response"])
     except (json.JSONDecodeError, KeyError):
         data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def clean_tags(tags) -> list[str]:
+    """'#AI Tools', 'Python ' -> ['ai-tools', 'python']; max 6, no duplicates."""
+    if isinstance(tags, str):
+        tags = re.split(r"[,\s]+(?=#)|,", tags)
+    result = []
+    for t in tags or []:
+        t = re.sub(r"[^a-z0-9-]", "", str(t).strip().lstrip("#").lower().replace(" ", "-"))
+        t = re.sub(r"-+", "-", t).strip("-")
+        if t and t not in result:
+            result.append(t)
+    return result[:6]
+
+
+def summarise(transcript: str, screen: str) -> dict:
+    """Ask the local Ollama model for a structured note."""
+    existing = [t for t, _ in all_tags()][:30]
+    tag_hint = ("Tags already used in my notes (reuse them when they fit): "
+                + ", ".join(existing)) if existing else ""
+    prompt = (PROMPT.replace("<<TRANSCRIPT>>", transcript or "(no speech)")
+                    .replace("<<SCREEN>>", screen or "(no on-screen text)")
+                    .replace("<<EXISTING_TAGS>>", tag_hint))
+    data = ask_ollama_json(prompt)
     # Fill in anything the model left out so the note always renders
     data.setdefault("title", "Untitled reel")
     data.setdefault("category", "other")
@@ -137,6 +164,7 @@ def summarise(transcript: str, screen: str) -> dict:
     data.setdefault("key_points", [])
     data.setdefault("resources", [])
     data.setdefault("action_items", [])
+    data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
     return data
 
@@ -189,6 +217,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
         f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
+        tags_line(data.get("tags", [])),
         "",
         "## Summary",
         data["summary"],
@@ -283,6 +312,76 @@ def open_actions() -> list[dict]:
                 results.append({"path": note, "line": i, "title": title,
                                 "action": line[6:].strip()})
     return results
+
+
+def tags_line(tags: list[str]) -> str:
+    return "- Tags: " + " ".join(f"#{t}" for t in tags)
+
+
+def read_tags(path: Path) -> list[str]:
+    """Tags from a note's '- Tags: #a #b' line (empty list for old notes)."""
+    for line in path.read_text(encoding="utf-8").splitlines()[:12]:
+        if line.startswith("- Tags:"):
+            return clean_tags(re.findall(r"#([\w-]+)", line))
+    return []
+
+
+def notes_with_tag(tag: str) -> list[Path]:
+    """Notes tagged exactly `tag`, or with tags starting with it
+    (so /tag ai finds #ai and #ai-tools). Newest first."""
+    tag = clean_tags([tag])[0] if clean_tags([tag]) else ""
+    if not tag or not NOTES_DIR.exists():
+        return []
+    hits = [p for p in NOTES_DIR.glob("*.md")
+            if any(t == tag or t.startswith(tag + "-") for t in read_tags(p))]
+    return sorted(hits, reverse=True)
+
+
+def all_tags() -> list[tuple[str, int]]:
+    """Every tag with how many notes use it, most used first."""
+    counts: dict[str, int] = {}
+    if NOTES_DIR.exists():
+        for p in NOTES_DIR.glob("*.md"):
+            for t in read_tags(p):
+                counts[t] = counts.get(t, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+RETAG_PROMPT = """Here is a note about a short social media video.
+Return ONLY a JSON object: {"tags": [...]} with 3-6 short topic tags,
+lowercase, words joined with "-", no "#". Prefer common, reusable tags,
+e.g. "python", "ai-tools", "github", "claude", "productivity", "communication".
+<<EXISTING>>
+NOTE:
+<<NOTE>>
+"""
+
+
+def tag_untagged_notes() -> list[tuple[str, list[str]]]:
+    """Add tags to older notes that don't have any. Returns (title, tags) per note."""
+    done = []
+    if not NOTES_DIR.exists():
+        return done
+    for path in sorted(NOTES_DIR.glob("*.md")):
+        if read_tags(path):
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        existing = [t for t, _ in all_tags()][:30]
+        hint = ("Reuse these existing tags where they fit: " + ", ".join(existing)) if existing else ""
+        prompt = (RETAG_PROMPT.replace("<<EXISTING>>", hint)
+                  .replace("<<NOTE>>", note_summary_text(path)[:4000]))
+        tags = clean_tags(ask_ollama_json(prompt).get("tags", []))
+        if not tags:
+            continue
+        # Put the Tags line after the other '- Key: value' header lines
+        i = 2
+        while i < len(lines) and lines[i].startswith("- "):
+            i += 1
+        lines.insert(i, tags_line(tags))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        title = lines[0].lstrip("# ").strip()
+        done.append((title, tags))
+    return done
 
 
 SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,

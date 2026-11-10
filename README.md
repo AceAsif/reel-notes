@@ -42,7 +42,12 @@ Reel video ───────────────────────
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
 | `/notes` | Lists your 10 newest notes |
-| `/note 1` | Opens note 1 from your last `/search` or `/notes` (without the transcript) |
+| `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
+| `/tags` | Lists all your tags with how many notes use each |
+| `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
+| `/retag` | Adds tags to older notes saved before tags existed |
+
+Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
 

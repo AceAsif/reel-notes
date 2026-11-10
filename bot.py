@@ -38,7 +38,10 @@ def is_allowed(update: Update) -> bool:
 def format_reply(data: dict, note_path: Path) -> str:
     lang = data.get("language", "en")
     lang_tag = f"  🌐 {lang}→en" if lang != "en" else ""
-    parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}", "", data["summary"]]
+    parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}"]
+    if data.get("tags"):
+        parts.append("🏷 " + " ".join(f"#{t}" for t in data["tags"]))
+    parts += ["", data["summary"]]
     if data["key_points"]:
         parts += ["", "Key points:", *[f"• {p}" for p in data["key_points"]]]
     if data["resources"]:
@@ -56,7 +59,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel link or a reel video and I'll turn it into a note.\n"
         "/todo shows your open action items, /done 2 ticks one off.\n"
-        "/search strix finds notes, /notes lists the latest, /note 1 opens one."
+        "/search strix finds notes, /notes lists the latest, /note 1 opens one.\n"
+        "/tags lists your tags, /tag python filters by one."
     )
 
 
@@ -230,6 +234,56 @@ async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
+async def tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tag python  shows every note tagged #python."""
+    if not is_allowed(update):
+        return
+    name = " ".join(context.args or []).strip()
+    if not name:
+        await update.message.reply_text("Usage: /tag python   (see all tags with /tags)")
+        return
+    paths = processor.notes_with_tag(name)
+    if not paths:
+        await update.message.reply_text(
+            f"🏷 No notes tagged #{name.lstrip('#').lower()}. See all tags with /tags")
+        return
+    context.user_data["last_results"] = [str(p) for p in paths]
+    lines = [f"🏷 {len(paths)} note(s) tagged #{name.lstrip('#').lower()}:", ""]
+    for n, p in enumerate(paths, start=1):
+        title = p.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+        lines.append(f"{n}. {title}  ({p.name[:10]})")
+    lines += ["", "Open one with /note 1"]
+    await update.message.reply_text("\n".join(lines)[:4000])
+
+
+async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tags lists all tags with how many notes use each."""
+    if not is_allowed(update):
+        return
+    counts = processor.all_tags()
+    if not counts:
+        await update.message.reply_text(
+            "No tags yet. New reels get tags automatically; use /retag for older notes.")
+        return
+    lines = ["🏷 Your tags:", ""] + [f"#{t}  ({n})" for t, n in counts]
+    lines += ["", "Filter with /tag python"]
+    await update.message.reply_text("\n".join(lines)[:4000])
+
+
+async def retag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/retag adds tags to older notes that were saved before tags existed."""
+    if not is_allowed(update):
+        return
+    status = await update.message.reply_text("🏷 Adding tags to older notes... ⏳")
+    done = await asyncio.to_thread(processor.tag_untagged_notes)
+    if not done:
+        await status.edit_text("🏷 All notes already have tags.")
+        return
+    lines = [f"🏷 Tagged {len(done)} note(s):", ""]
+    lines += [f"• {title}: " + " ".join(f"#{t}" for t in t_list) for title, t_list in done]
+    await status.edit_text("\n".join(lines)[:4000])
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id, text="📅 Weekly review\n\n" + actions_text()
@@ -257,6 +311,9 @@ def main() -> None:
     app.add_handler(CommandHandler("search", search))
     app.add_handler(CommandHandler("note", note))
     app.add_handler(CommandHandler("notes", notes_list))
+    app.add_handler(CommandHandler("tag", tag))
+    app.add_handler(CommandHandler("tags", tags))
+    app.add_handler(CommandHandler("retag", retag))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 
