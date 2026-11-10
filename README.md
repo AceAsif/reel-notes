@@ -37,6 +37,7 @@ Reel video ───────────────────────
 |---|---|
 | *(send a reel link)* | Downloads the reel and makes a note |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
+| *(send a carousel post link)* | Instagram posts with several videos (`instagram.com/p/...`): every video (up to 10) is processed into **one** combined note. Photo slides are skipped |
 | `/start` | Shows your Telegram user ID |
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
@@ -48,6 +49,8 @@ Reel video ───────────────────────
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
+
+**The post caption is read too**, because creators often put links and details there. It's given to the AI, saved in the note under `## Post caption`, and links in it count as real (not invented).
 
 **GitHub repos are looked up automatically** for tech and programming reels. A tool named in the reel (e.g. "Claude mem") is matched to its real repo, using a repo shown on screen first and then GitHub search. Only an exact name match is accepted, so the bot doesn't link the wrong repo. The note gets the real link, ⭐ stars and the repo's description:
 

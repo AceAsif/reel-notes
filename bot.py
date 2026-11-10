@@ -39,6 +39,8 @@ def is_allowed(update: Update) -> bool:
 def format_reply(data: dict, note_path: Path) -> str:
     lang = data.get("language", "en")
     lang_tag = f"  🌐 {lang}→en" if lang != "en" else ""
+    if data.get("video_count", 1) > 1:
+        lang_tag += f"  🎞 {data['video_count']} videos"
     parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}"]
     if data.get("tags"):
         parts.append("🏷 " + " ".join(f"#{t}" for t in data["tags"]))
@@ -120,11 +122,18 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if await already_saved(msg, url):
         return
 
-    status = await msg.reply_text("Got the link ⏳ Downloading and processing...")
+    status = await msg.reply_text("Got the link ⏳ Downloading...")
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            video_path = await asyncio.to_thread(processor.download_reel, url, Path(tmp))
-            note_path, data = await asyncio.to_thread(processor.process_video, video_path, url)
+            videos, caption = await asyncio.to_thread(processor.download_media, url, Path(tmp))
+            if len(videos) > 1:
+                await status.edit_text(
+                    f"Found {len(videos)} videos in this post ⏳ Processing all of them "
+                    f"(about {len(videos)} min)...")
+            else:
+                await status.edit_text("Downloaded ⏳ Processing...")
+            note_path, data = await asyncio.to_thread(
+                processor.process_videos, videos, url, caption)
     except Exception as exc:
         await status.edit_text(
             f"❌ Something went wrong: {exc}\n\n"

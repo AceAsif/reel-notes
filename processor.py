@@ -81,7 +81,10 @@ def screen_text(video: Path, workdir: Path) -> str:
 
 
 PROMPT = """You turn short social media videos (motivation, tech, programming) into useful notes.
-Below is the spoken transcript and the text that appeared on screen (from OCR, so it may have typos).
+Below is the spoken transcript, the text that appeared on screen (from OCR, so it may have
+typos), and the post's caption written by the creator (often has links and extra details).
+A post can have several videos, marked [Video 1], [Video 2], ...: make ONE note that
+covers ALL of them, with at least one key point per video.
 
 Always write every field in English, even if the transcript or on-screen text
 is in another language (e.g. Hindi or Hinglish); translate as needed.
@@ -111,11 +114,17 @@ TRANSCRIPT:
 
 ON-SCREEN TEXT:
 <<SCREEN>>
+
+POST CAPTION:
+<<CAPTION>>
 """
 
 
 def ask_ollama_json(prompt: str) -> dict:
     """Send a prompt to the local Ollama model and get a JSON object back."""
+    # ~3.5 characters per token. Long multi-video posts need a bigger context window
+    # (uses more graphics-card memory, so only when needed).
+    num_ctx = 8192 if len(prompt) < 20000 else 16384
     resp = requests.post(
         f"{OLLAMA_URL}/api/generate",
         json={
@@ -125,7 +134,7 @@ def ask_ollama_json(prompt: str) -> dict:
             "format": "json",
             "options": {
                 "temperature": 0.2,  # low = consistent notes for the same reel
-                "num_ctx": 8192,     # room for long transcripts + on-screen text
+                "num_ctx": num_ctx,  # room for long transcripts + on-screen text
             },
         },
         timeout=600,
@@ -151,14 +160,16 @@ def clean_tags(tags) -> list[str]:
     return result[:6]
 
 
-def summarise(transcript: str, screen: str) -> dict:
+def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     """Ask the local Ollama model for a structured note."""
     existing = [t for t, _ in all_tags()][:30]
     tag_hint = ("Tags already used in my notes (reuse them when they fit): "
                 + ", ".join(existing)) if existing else ""
     prompt = (PROMPT.replace("<<TRANSCRIPT>>", transcript or "(no speech)")
                     .replace("<<SCREEN>>", screen or "(no on-screen text)")
+                    .replace("<<CAPTION>>", caption or "(no caption)")
                     .replace("<<EXISTING_TAGS>>", tag_hint))
+    screen = screen + "\n" + caption  # links in the caption count as "shown in the post"
     data = ask_ollama_json(prompt)
     # Fill in anything the model left out so the note always renders
     data.setdefault("title", "Untitled reel")
@@ -301,7 +312,7 @@ def slugify(text: str) -> str:
 
 
 def save_note(data: dict, transcript: str, screen: str, source: str,
-              language: str = "en") -> Path:
+              language: str = "en", caption: str = "") -> Path:
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
     path = NOTES_DIR / f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
@@ -313,6 +324,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
         f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
+        *([f"- Videos: {data['video_count']}"] if data.get("video_count", 1) > 1 else []),
         tags_line(data.get("tags", [])),
         "",
         "## Summary",
@@ -336,19 +348,32 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         screen or "(none)",
         "",
     ]
+    if caption:
+        lines += ["## Post caption", caption, ""]
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
-def download_reel(url: str, workdir: Path) -> Path:
-    """Download a reel from a link with yt-dlp. Returns the video file path."""
+MAX_VIDEOS = 10                       # most videos taken from one carousel post
+VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+
+
+def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
+    """Download a reel OR every video in a carousel post.
+
+    Returns (video files in post order, the post caption).
+    Photo slides are skipped (yt-dlp only downloads videos).
+    """
     import yt_dlp
 
     opts = {
-        "outtmpl": str(workdir / "reel.%(ext)s"),
+        # playlist_index = position in a carousel ("NA" for a single reel)
+        "outtmpl": str(workdir / "item_%(playlist_index)s.%(ext)s"),
         "format": "bv*+ba/b",           # best video + audio, merged by ffmpeg
         "merge_output_format": "mp4",
-        "noplaylist": True,
+        "noplaylist": False,            # carousels are "playlists": take every video
+        "playlistend": MAX_VIDEOS,
+        "ignoreerrors": True,           # one broken slide shouldn't stop the rest
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,             # no [download] lines filling bot.log
@@ -357,21 +382,57 @@ def download_reel(url: str, workdir: Path) -> Path:
     if os.getenv("COOKIES_FILE"):
         opts["cookiefile"] = os.getenv("COOKIES_FILE")
     with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(url, download=True)
-    files = sorted(workdir.glob("reel.*"))
-    if not files:
-        raise RuntimeError("Download finished but no video file was found.")
-    return files[0]
+        info = ydl.extract_info(url, download=True) or {}
+
+    caption = info.get("description") or ""
+    if not caption:  # carousels keep the caption on each item
+        for entry in info.get("entries") or []:
+            if entry and entry.get("description"):
+                caption = entry["description"]
+                break
+
+    def position(p: Path) -> int:
+        n = p.stem.split("_")[-1]
+        return int(n) if n.isdigit() else 0
+
+    videos = sorted((p for p in workdir.glob("item_*") if p.suffix.lower() in VIDEO_EXTS),
+                    key=position)
+    if not videos:
+        raise RuntimeError("No videos found in this post. Photo-only posts aren't supported yet.")
+    return videos, caption.strip()
+
+
+def process_videos(videos: list[Path], source: str = "", caption: str = "") -> tuple[Path, dict]:
+    """Full pipeline for one reel or a multi-video post → ONE note."""
+    transcripts, screens, languages = [], [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, video in enumerate(videos[:MAX_VIDEOS], start=1):
+            text, lang = transcribe(video)
+            workdir = Path(tmp) / f"v{i}"
+            workdir.mkdir()
+            transcripts.append(text)
+            screens.append(screen_text(video, workdir))
+            languages.append(lang)
+
+    if len(transcripts) == 1:
+        transcript, screen = transcripts[0], screens[0]
+    else:  # label each part so the AI (and you) can tell the videos apart
+        per_video = max(1500, 9000 // len(screens))   # keep the prompt a sensible size
+        transcript = "\n\n".join(f"[Video {i}] {t or '(no speech)'}"
+                                 for i, t in enumerate(transcripts, 1))
+        screen = "\n\n".join(f"[Video {i}]\n{s[:per_video]}"
+                             for i, s in enumerate(screens, 1))
+    language = next((lang for lang in languages if lang != "en"), "en")
+
+    data = summarise(transcript, screen, caption)
+    data["language"] = language
+    data["video_count"] = len(transcripts)
+    return save_note(data, transcript, screen, source, language, caption), data
 
 
 def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
-    """Full pipeline. Returns the note path and the structured data."""
-    with tempfile.TemporaryDirectory() as tmp:
-        transcript, language = transcribe(video)
-        screen = screen_text(video, Path(tmp))
-    data = summarise(transcript, screen)
-    data["language"] = language
-    return save_note(data, transcript, screen, source, language), data
+    """One video file (kept for older code paths)."""
+    return process_videos([video], source)
 
 
 def normalise_url(url: str) -> str:
@@ -481,7 +542,7 @@ def tag_untagged_notes() -> list[tuple[str, list[str]]]:
 
 
 SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
-                  "Action items": 2, "Transcript": 1, "On-screen text": 1}
+                  "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 
 def search_notes(query: str, limit: int = 15) -> list[dict]:
