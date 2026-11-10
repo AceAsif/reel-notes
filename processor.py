@@ -188,6 +188,10 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
 # ---- GitHub repo detection ------------------------------------------------
 
 GITHUB_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", re.I)
+INSTALL_CMD_RE = re.compile(
+    r"npx\s+(?:-y\s+)?skills\s+add\s+([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)((?:\s+--skill\s+[\w-]+)*)",
+    re.I)
+MIN_SEARCH_STARS = 50
 GENERIC_WORDS = r"\b(github|repo|repository|plugin|skill|tool|library|framework|the|app)\b"
 
 
@@ -230,19 +234,30 @@ def find_repo(name: str, source_text: str) -> dict | None:
     key = squash(re.sub(GENERIC_WORDS, "", name.lower()))
     if len(key) < 3:
         return None
-    # 1) An owner/repo shown in the video (OCR splits URLs, so join around / and .)
-    joined = re.sub(r"\s*([/.])\s*", r"\1", source_text)
+    joined = re.sub(r"\s*([/.])\s*", r"\1", source_text)  # OCR splits URLs; join them
+    # 1) An install command in the video/caption, e.g.
+    #    "npx skills add benjitaylor/skills --skill stageshow"
+    for owner, repo, skills in INSTALL_CMD_RE.findall(joined):
+        names = [squash(repo)] + [squash(s) for s in re.findall(r"--skill\s+([\w-]+)", skills)]
+        if any(len(n) >= 3 and (key == n or key in n or n in key) for n in names):
+            info = repo_info(owner, repo)
+            if info:
+                return info
+    # 2) A github.com/owner/repo link shown in the video or written in the caption
     for owner, repo in GITHUB_REPO_RE.findall(joined):
         r = squash(repo.removesuffix(".git"))
         if len(r) >= 3 and (key in r or r in key):
             info = repo_info(owner, repo)
             if info:
                 return info
-    # 2) GitHub search: the repo name must match the tool name exactly
+    # 3) GitHub search: the repo name must match the tool name exactly, AND have at
+    #    least MIN_SEARCH_STARS stars, so a tiny unrelated repo with the same name
+    #    (e.g. a 5-star "StageShow") isn't picked by mistake
     found = github_get("/search/repositories",
                        {"q": f"{name} in:name", "sort": "stars", "per_page": 10})
     for item in (found or {}).get("items", []):
-        if squash(item.get("name", "")) == key:
+        if (squash(item.get("name", "")) == key
+                and item.get("stargazers_count", 0) >= MIN_SEARCH_STARS):
             return {"link": item["html_url"], "stars": item.get("stargazers_count", 0),
                     "description": (item.get("description") or "").strip()}
     return None
