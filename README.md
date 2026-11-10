@@ -40,6 +40,7 @@ Reel video ───────────────────────
 | `/start` | Shows your Telegram user ID |
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
+| `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
 | `/notes` | Lists your 10 newest notes |
 | `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
@@ -47,6 +48,14 @@ Reel video ───────────────────────
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
+
+**GitHub repos are looked up automatically** for tech and programming reels. A tool named in the reel (e.g. "Claude mem") is matched to its real repo, using a repo shown on screen first and then GitHub search. Only an exact name match is accepted, so the bot doesn't link the wrong repo. The note gets the real link, ⭐ stars and the repo's description:
+
+```
+- Claude mem https://github.com/thedotmack/claude-mem  ⭐ 115.6k — Persistent Context Across Sessions...
+```
+
+If there's no confident match, the note keeps a GitHub search link. This uses the free GitHub API without a login. Optionally set `GITHUB_TOKEN` in `.env` for higher rate limits.
 
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
@@ -123,6 +132,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `TIMEZONE` | `Australia/Hobart` | For the weekly reminder |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
 | `COOKIES_FILE` | — | Only if Instagram/Facebook downloads need a login |
+| `GITHUB_TOKEN` | — | Optional. Higher GitHub API limits for repo lookups |
 
 ## Known limits
 

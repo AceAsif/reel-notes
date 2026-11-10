@@ -59,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel link or a reel video and I'll turn it into a note.\n"
-        "/todo shows your open action items, /done 2 ticks one off.\n"
+        "/todo shows your open action items, /done 2 ticks one off, /skip 3 drops one.\n"
         "/search strix finds notes, /notes lists the latest, /note 1 opens one.\n"
         "/tags lists your tags, /tag python filters by one."
     )
@@ -147,7 +147,8 @@ def actions_text() -> str:
             current_title = a["title"]
             lines += ["", f"📌 {current_title}"]
         lines.append(f"{n}. ☐ {a['action']}")
-    lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)"]
+    lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)",
+              "Not doing one? /skip 3"]
     text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:3900] + "\n...\n\nList too long, tick some off with /done first."
@@ -159,23 +160,35 @@ async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(actions_text())
 
 
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/done 2  or  /done 1 3 4  ticks off actions by their /todo number."""
+async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       mark: str, command: str, heading: str) -> None:
+    """Shared code for /done (mark 'x') and /skip (mark '-')."""
     if not is_allowed(update):
         return
     numbers = [int(x) for x in re.findall(r"\d+", " ".join(context.args or []))]
     if not numbers:
-        await update.message.reply_text("Usage: /done 2  (numbers come from /todo)")
+        await update.message.reply_text(
+            f"Usage: /{command} 2  or  /{command} 1 3 4  (numbers come from /todo)")
         return
-    ticked = processor.complete_actions(numbers)
-    if not ticked:
+    changed = processor.complete_actions(numbers, mark)
+    if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
     remaining = len(processor.open_actions())
-    reply = ["✅ Done:", *[f"• {t}" for t in ticked], "",
+    reply = [heading, *[f"• {t}" for t in changed], "",
              f"{remaining} open items left. Numbers have changed, so send /todo again "
-             "before your next /done."]
+             "before your next /done or /skip."]
     await update.message.reply_text("\n".join(reply))
+
+
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/done 2  or  /done 1 3 4  ticks off actions by their /todo number."""
+    await mark_actions(update, context, "x", "done", "✅ Done:")
+
+
+async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/skip 3 drops an action you've decided not to do (kept in the note as [-])."""
+    await mark_actions(update, context, "-", "skip", "⏭ Skipped:")
 
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -340,6 +353,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("done", done))
+    app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("search", search))
     app.add_handler(CommandHandler("note", note))
     app.add_handler(CommandHandler("notes", notes_list))

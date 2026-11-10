@@ -23,6 +23,9 @@ NOTES_DIR = Path(os.getenv("NOTES_DIR", "notes"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# Optional: a GitHub token raises the API limit (10 -> 30 searches/minute).
+# Not needed for normal use.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 FRAME_EVERY_SECONDS = int(os.getenv("FRAME_EVERY_SECONDS", "2"))
 
 # On Windows, point this at tesseract.exe if it is not on PATH
@@ -166,7 +169,94 @@ def summarise(transcript: str, screen: str) -> dict:
     data.setdefault("action_items", [])
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
+    data["resources"] = enrich_with_github(data["resources"], data["category"],
+                                           transcript + "\n" + screen)
     return data
+
+
+# ---- GitHub repo detection ------------------------------------------------
+
+GITHUB_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", re.I)
+GENERIC_WORDS = r"\b(github|repo|repository|plugin|skill|tool|library|framework|the|app)\b"
+
+
+def squash(text: str) -> str:
+    """'Claude mem' -> 'claudemem', 'claude-mem' -> 'claudemem' (for comparing names)."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def github_get(path: str, params: dict | None = None) -> dict | None:
+    """Call the GitHub API. Returns None on any problem, so notes never fail."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "reel-notes-bot"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    try:
+        r = requests.get("https://api.github.com" + path, params=params,
+                         headers=headers, timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def repo_info(owner: str, name: str) -> dict | None:
+    """Real link, stars and description for owner/name."""
+    name = name.removesuffix(".git")
+    d = github_get(f"/repos/{owner}/{name}")
+    if not d or "html_url" not in d:
+        # Fallback: the same repo through the search API
+        found = github_get("/search/repositories", {"q": f"repo:{owner}/{name}"})
+        items = (found or {}).get("items", [])
+        if not items:
+            return None
+        d = items[0]
+    return {"link": d["html_url"], "stars": d.get("stargazers_count", 0),
+            "description": (d.get("description") or "").strip()}
+
+
+def find_repo(name: str, source_text: str) -> dict | None:
+    """Find the GitHub repo for a tool name. Only accepts a confident match,
+    otherwise returns None and the note keeps a GitHub search link."""
+    key = squash(re.sub(GENERIC_WORDS, "", name.lower()))
+    if len(key) < 3:
+        return None
+    # 1) An owner/repo shown in the video (OCR splits URLs, so join around / and .)
+    joined = re.sub(r"\s*([/.])\s*", r"\1", source_text)
+    for owner, repo in GITHUB_REPO_RE.findall(joined):
+        r = squash(repo.removesuffix(".git"))
+        if len(r) >= 3 and (key in r or r in key):
+            info = repo_info(owner, repo)
+            if info:
+                return info
+    # 2) GitHub search: the repo name must match the tool name exactly
+    found = github_get("/search/repositories",
+                       {"q": f"{name} in:name", "sort": "stars", "per_page": 10})
+    for item in (found or {}).get("items", []):
+        if squash(item.get("name", "")) == key:
+            return {"link": item["html_url"], "stars": item.get("stargazers_count", 0),
+                    "description": (item.get("description") or "").strip()}
+    return None
+
+
+def enrich_with_github(resources: list, category: str, source_text: str) -> list:
+    """Add real GitHub links, stars and descriptions to resources."""
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        link = str(r.get("link", "")).strip()
+        m = GITHUB_REPO_RE.search(link)
+        if m:                                   # already a repo link: check it's real
+            info = repo_info(m.group(1), m.group(2))
+        elif not link and category in ("tech", "programming"):
+            info = find_repo(str(r.get("name", "")), source_text)
+        else:
+            info = None
+        if info:
+            r.update(info)
+    return resources
+
+
+def format_stars(n: int) -> str:
+    return f"{n / 1000:.1f}k".replace(".0k", "k") if n >= 1000 else str(n)
 
 
 def drop_invented_links(resources: list, source_text: str) -> list:
@@ -197,7 +287,13 @@ def resource_line(r, category: str = "") -> str:
             link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
         else:
             link = "https://www.google.com/search?q=" + quote_plus(name)
-    return f"{name} {link}".strip()
+    line = f"{name} {link}".strip()
+    if "stars" in r:
+        line += f"  ⭐ {format_stars(int(r['stars']))}"
+    if r.get("description"):
+        desc = r["description"]
+        line += " — " + (desc if len(desc) <= 100 else desc[:97] + "...")
+    return line
 
 
 def slugify(text: str) -> str:
@@ -434,8 +530,12 @@ def note_summary_text(path: Path) -> str:
     return text.split("\n## Transcript")[0].strip()
 
 
-def complete_actions(numbers: list[int]) -> list[str]:
-    """Tick off actions by their /todo number. Returns the texts that were ticked."""
+def complete_actions(numbers: list[int], mark: str = "x") -> list[str]:
+    """Tick off actions by their /todo number. Returns the texts that were ticked.
+
+    mark="x" -> done:    '- [x] ...'
+    mark="-" -> skipped: '- [-] ...' (no longer shown in /todo, but kept in the note)
+    """
     actions = open_actions()
     chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
     by_file: dict[Path, list[int]] = {}
@@ -444,6 +544,6 @@ def complete_actions(numbers: list[int]) -> list[str]:
     for path, line_nos in by_file.items():
         lines = path.read_text(encoding="utf-8").splitlines()
         for i in line_nos:
-            lines[i] = lines[i].replace("- [ ] ", "- [x] ", 1)
+            lines[i] = lines[i].replace("- [ ] ", f"- [{mark}] ", 1)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [a["action"] for a in chosen]
