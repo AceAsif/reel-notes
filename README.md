@@ -45,6 +45,7 @@ Reel video ───────────────────────
 | `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
 | `/tags` | Lists all your tags with how many notes use each |
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
+| `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
 
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.

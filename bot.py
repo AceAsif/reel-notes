@@ -12,10 +12,11 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before importing processor so it sees .env values
 
-from telegram import Update  # noqa: E402
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
 from telegram.error import NetworkError, TimedOut  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -234,26 +235,57 @@ async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
-async def tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/tag python  shows every note tagged #python."""
-    if not is_allowed(update):
-        return
-    name = " ".join(context.args or []).strip()
-    if not name:
-        await update.message.reply_text("Usage: /tag python   (see all tags with /tags)")
-        return
+def tag_results_text(name: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Text listing the notes with this tag (and remember them for /note N)."""
+    name = name.lstrip("#").lower()
     paths = processor.notes_with_tag(name)
     if not paths:
-        await update.message.reply_text(
-            f"🏷 No notes tagged #{name.lstrip('#').lower()}. See all tags with /tags")
-        return
+        return f"🏷 No notes tagged #{name}. See all tags with /tags"
     context.user_data["last_results"] = [str(p) for p in paths]
-    lines = [f"🏷 {len(paths)} note(s) tagged #{name.lstrip('#').lower()}:", ""]
+    lines = [f"🏷 {len(paths)} note(s) tagged #{name}:", ""]
     for n, p in enumerate(paths, start=1):
         title = p.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
         lines.append(f"{n}. {title}  ({p.name[:10]})")
     lines += ["", "Open one with /note 1"]
-    await update.message.reply_text("\n".join(lines)[:4000])
+    return "\n".join(lines)[:4000]
+
+
+def tag_buttons(limit: int = 12, per_row: int = 3) -> InlineKeyboardMarkup | None:
+    """Buttons for your most-used tags, e.g. [#github (7)] [#claude (2)] ..."""
+    top = processor.all_tags()[:limit]
+    if not top:
+        return None
+    buttons = [InlineKeyboardButton(f"#{t} ({n})", callback_data=f"tag:{t}"[:64])
+               for t, n in top]
+    rows = [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+    return InlineKeyboardMarkup(rows)
+
+
+async def tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tag python shows notes tagged #python; /tag on its own shows tag buttons."""
+    if not is_allowed(update):
+        return
+    name = " ".join(context.args or []).strip()
+    if name:
+        await update.message.reply_text(tag_results_text(name, context))
+        return
+    keyboard = tag_buttons()
+    if keyboard is None:
+        await update.message.reply_text(
+            "No tags yet. New reels get tags automatically; use /retag for older notes.")
+        return
+    await update.message.reply_text(
+        "🏷 Pick a tag (or type /tag python for any tag):", reply_markup=keyboard)
+
+
+async def tag_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs when you tap one of the tag buttons."""
+    query = update.callback_query
+    await query.answer()  # stops the loading spinner on the button
+    if not is_allowed(update):
+        return
+    name = query.data.split(":", 1)[1]
+    await query.message.reply_text(tag_results_text(name, context))
 
 
 async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -312,6 +344,7 @@ def main() -> None:
     app.add_handler(CommandHandler("note", note))
     app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(CommandHandler("tag", tag))
+    app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
