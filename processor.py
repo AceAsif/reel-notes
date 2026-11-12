@@ -80,17 +80,7 @@ def screen_text(video: Path, workdir: Path) -> str:
          "-vf", f"fps=1/{FRAME_EVERY_SECONDS}", str(frames / "f_%03d.png")],
         check=True,
     )
-    seen, lines = set(), []
-    for img in sorted(frames.glob("*.png")):
-        for line in pytesseract.image_to_string(str(img)).splitlines():
-            line = line.strip()
-            if len(line) < 4:
-                continue
-            key = line.lower()
-            if key not in seen:
-                seen.add(key)
-                lines.append(line)
-    return "\n".join(lines)[:6000]
+    return ocr_lines(sorted(frames.glob("*.png")))
 
 
 PROMPT = """You turn short social media videos (motivation, tech, programming) into useful notes.
@@ -454,7 +444,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
         f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
-        *([f"- Videos: {data['video_count']}"] if data.get("video_count", 1) > 1 else []),
+        *([f"- Slides: {slide_summary(data)}"] if slide_total(data) > 1 else []),
         tags_line(data.get("tags", [])),
         "",
         "## Summary",
@@ -486,15 +476,22 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
     return path
 
 
-MAX_VIDEOS = 10                       # most videos taken from one carousel post
+MAX_VIDEOS = 10                       # most slides taken from one carousel post
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+
+
+def slide_position(p: Path) -> int:
+    """item_3.mp4 -> 3 (a single reel is 'item_NA' -> 0)."""
+    n = p.stem.split("_")[-1]
+    return int(n) if n.isdigit() else 0
 
 
 def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
-    """Download a reel OR every video in a carousel post.
+    """Download a reel, or every slide of a carousel post (videos AND photos).
 
-    Returns (video files in post order, the post caption).
-    Photo slides are skipped (yt-dlp only downloads videos).
+    Returns (slide files in post order, the post caption). For a video slide you
+    get the video; for a photo slide you get the image.
     """
     import yt_dlp
 
@@ -503,9 +500,13 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
         "outtmpl": str(workdir / "item_%(playlist_index)s.%(ext)s"),
         "format": "bv*+ba/b",           # best video + audio, merged by ffmpeg
         "merge_output_format": "mp4",
-        "noplaylist": False,            # carousels are "playlists": take every video
+        "noplaylist": False,            # carousels are "playlists": take every slide
         "playlistend": MAX_VIDEOS,
         "ignoreerrors": True,           # one broken slide shouldn't stop the rest
+        # Photo slides have no video. These two options keep them and save the
+        # slide's picture (its "thumbnail" is the full photo):
+        "ignore_no_formats_error": True,
+        "writethumbnail": True,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,             # no [download] lines filling bot.log
@@ -522,50 +523,97 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
             if entry and entry.get("description"):
                 caption = entry["description"]
                 break
+    return pick_slides(workdir), caption.strip()
 
-    def position(p: Path) -> int:
-        n = p.stem.split("_")[-1]
-        return int(n) if n.isdigit() else 0
 
-    videos = sorted((p for p in workdir.glob("item_*") if p.suffix.lower() in VIDEO_EXTS),
-                    key=position)
-    if not videos:
-        raise RuntimeError("No videos found in this post. Photo-only posts aren't supported yet.")
-    return videos, caption.strip()
+def pick_slides(workdir: Path) -> list[Path]:
+    """One file per slide: the video if there is one, otherwise the photo.
+    (Video slides also get a cover image saved; that one is ignored.)"""
+    by_slide: dict[int, Path] = {}
+    for p in workdir.glob("item_*"):
+        ext = p.suffix.lower()
+        pos = slide_position(p)
+        if ext in VIDEO_EXTS:
+            by_slide[pos] = p
+        elif ext in IMAGE_EXTS and pos not in by_slide:
+            by_slide[pos] = p
+    # a photo may have been seen before its video: prefer videos
+    for p in workdir.glob("item_*"):
+        if p.suffix.lower() in VIDEO_EXTS:
+            by_slide[slide_position(p)] = p
+    slides = [by_slide[k] for k in sorted(by_slide)]
+    if not slides:
+        raise RuntimeError("Nothing could be downloaded from this post.")
+    return slides
+
+
+def ocr_lines(images: list[Path]) -> str:
+    """OCR several images; keep each distinct line once."""
+    seen, lines = set(), []
+    for img in images:
+        for line in pytesseract.image_to_string(str(img)).splitlines():
+            line = line.strip()
+            if len(line) < 4:
+                continue
+            key = line.lower()
+            if key not in seen:
+                seen.add(key)
+                lines.append(line)
+    return "\n".join(lines)[:6000]
+
+
+def image_text(image: Path, workdir: Path) -> str:
+    """OCR a photo slide. Formats the OCR library can't open (e.g. HEIC)
+    are converted to PNG with ffmpeg first."""
+    try:
+        return ocr_lines([image])
+    except Exception:
+        png = workdir / (image.stem + ".png")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(image), str(png)],
+                       check=True)
+        return ocr_lines([png])
 
 
 def process_videos(videos: list[Path], source: str = "", caption: str = "") -> tuple[Path, dict]:
-    """Full pipeline for one reel or a multi-video post → ONE note."""
-    transcripts, screens, languages = [], [], []
+    """Full pipeline for one reel or a multi-slide post (videos and/or photos) → ONE note."""
+    labels, transcripts, screens, languages = [], [], [], []
+    photo_count = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for i, video in enumerate(videos[:MAX_VIDEOS], start=1):
-            workdir = Path(tmp) / f"v{i}"
+        for i, slide in enumerate(videos[:MAX_VIDEOS], start=1):
+            workdir = Path(tmp) / f"s{i}"
             workdir.mkdir()
+            is_photo = slide.suffix.lower() in IMAGE_EXTS
             try:
-                text, lang = transcribe(video)
-                screen = screen_text(video, workdir)
-            except Exception as exc:   # one broken video shouldn't stop the whole post
-                print(f"Skipping video {i} ({video.name}): {exc!r}")
+                if is_photo:
+                    text, lang = "", "en"
+                    screen = image_text(slide, workdir)
+                else:
+                    text, lang = transcribe(slide)
+                    screen = screen_text(slide, workdir)
+            except Exception as exc:   # one broken slide shouldn't stop the whole post
+                print(f"Skipping slide {i} ({slide.name}): {exc!r}")
                 continue
+            photo_count += is_photo
+            labels.append(f"Slide {len(labels) + 1}" + (" · photo" if is_photo else ""))
             transcripts.append(text)
             screens.append(screen)
             languages.append(lang)
     if not transcripts:
-        raise RuntimeError("None of the videos in this post could be processed.")
+        raise RuntimeError("None of the slides in this post could be processed.")
 
     if len(transcripts) == 1:
         transcript, screen = transcripts[0], screens[0]
-    else:  # label each part so the AI (and you) can tell the videos apart
-        per_video = max(1500, 9000 // len(screens))   # keep the prompt a sensible size
-        transcript = "\n\n".join(f"[Video {i}] {t or '(no speech)'}"
-                                 for i, t in enumerate(transcripts, 1))
-        screen = "\n\n".join(f"[Video {i}]\n{s[:per_video]}"
-                             for i, s in enumerate(screens, 1))
+    else:  # label each part so the AI (and you) can tell the slides apart
+        per_slide = max(1500, 9000 // len(screens))   # keep the prompt a sensible size
+        transcript = "\n\n".join(f"[{lab}] {t or '(no speech)'}"
+                                 for lab, t in zip(labels, transcripts))
+        screen = "\n\n".join(f"[{lab}]\n{s[:per_slide]}" for lab, s in zip(labels, screens))
     language = next((lang for lang in languages if lang != "en"), "en")
 
     data = summarise(transcript, screen, caption)
     data["language"] = language
-    data["video_count"] = len(transcripts)
+    data["video_count"] = len(transcripts) - photo_count
+    data["photo_count"] = photo_count
     return save_note(data, transcript, screen, source, language, caption), data
 
 
@@ -589,6 +637,18 @@ def find_note_by_source(url: str) -> Path | None:
             if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
                 return note
     return None
+
+
+def slide_total(data: dict) -> int:
+    return data.get("video_count", 1) + data.get("photo_count", 0)
+
+
+def slide_summary(data: dict) -> str:
+    """'5 (3 videos, 2 photos)' or '4 videos'."""
+    v, ph = data.get("video_count", 1), data.get("photo_count", 0)
+    if ph and v:
+        return f"{v + ph} ({v} video{'s' * (v != 1)}, {ph} photo{'s' * (ph != 1)})"
+    return f"{ph} photos" if ph else f"{v} videos"
 
 
 def motivation_lines(data: dict) -> list[str]:

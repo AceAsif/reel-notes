@@ -39,8 +39,8 @@ def is_allowed(update: Update) -> bool:
 def format_reply(data: dict, note_path: Path) -> str:
     lang = data.get("language", "en")
     lang_tag = f"  🌐 {lang}→en" if lang != "en" else ""
-    if data.get("video_count", 1) > 1:
-        lang_tag += f"  🎞 {data['video_count']} videos"
+    if processor.slide_total(data) > 1:
+        lang_tag += f"  🎞 {processor.slide_summary(data)}"
     parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}"]
     if data.get("tags"):
         parts.append("🏷 " + " ".join(f"#{t}" for t in data["tags"]))
@@ -140,9 +140,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         with tempfile.TemporaryDirectory() as tmp:
             videos, caption = await asyncio.to_thread(processor.download_media, url, Path(tmp))
             if len(videos) > 1:
+                photos = sum(v.suffix.lower() in processor.IMAGE_EXTS for v in videos)
+                kinds = processor.slide_summary(
+                    {"video_count": len(videos) - photos, "photo_count": photos})
                 await status.edit_text(
-                    f"Found {len(videos)} videos in this post ⏳ Processing all of them "
-                    f"(about {len(videos)} min)...")
+                    f"Found {kinds} in this post ⏳ Processing all of them "
+                    f"(about {len(videos) - photos + 1} min)...")
             else:
                 await status.edit_text("Downloaded ⏳ Processing...")
             note_path, data = await asyncio.to_thread(

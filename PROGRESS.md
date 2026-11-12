@@ -1,6 +1,6 @@
 # Progress - Build remaining Reel Notes features
 Branch: feature/remaining-features
-Last updated: 2026-11-13 00:25 (Hobart)
+Last updated: 2026-11-13 00:40 (Hobart)
 
 ## Plan (in this order)
 1. Add tests, tidy duplicate env.example
@@ -23,13 +23,16 @@ Last updated: 2026-11-13 00:25 (Hobart)
 
 - Step 5: Daily nudge at NUDGE_TIME (default 08:00) + /nudge; one action from the highest priority level, rotating daily; buttons Done / Skip / Another one (2 new tests)
 
+- Step 6: Photo slides in carousels: yt-dlp keeps slides with no video (ignore_no_formats_error) and saves each slide's photo (writethumbnail); photos are OCR'd and labelled [Slide N · photo]; photo-only posts now work too (3 new tests)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 6: photo slides in carousel posts (download images, OCR them, include in the note)
+- Step 7: notes on phone: /file N command to get a note as a file + README guide to sync the notes folder with OneDrive/Google Drive
 
 ## Decisions
+- Photo slides use yt-dlp's thumbnail of each slide, which for Instagram is the full photo (image_versions2). Checked in yt-dlp's source; still needs a real test on the user's PC.
 - Nudge buttons identify actions by a short file hash + line number, so they still work after /todo numbers change. NUDGE_TIME=off turns the nudge off.
 - Done/skip dates use Obsidian Tasks format (✅/❌ YYYY-MM-DD) so the notes also work with the Obsidian Tasks plugin. Actions ticked before this change have no date and aren't counted in stats.
 - Search-only repo matches need 300+ stars: the 68-star 'claude-code-setup' was wrong; repos shown in the video/caption are still trusted.
@@ -38,4 +41,4 @@ Last updated: 2026-11-13 00:25 (Hobart)
 - Tests use stand-ins for Whisper/Tesseract/Ollama/GitHub so they run anywhere in under a second.
 
 ## Problems / questions for the user
-- (none yet)
+- Please test a carousel with photo slides, e.g. instagram.com/p/DfPW8fmgCnt/ (couldn't download from Instagram in the build environment).

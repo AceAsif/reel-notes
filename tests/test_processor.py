@@ -176,3 +176,34 @@ def test_find_action_and_tick_by_id(notes):
     assert n == 2 and found["action"] == "b"
     p.complete_actions([n])
     assert p.find_action(p.action_id(a)) is None     # done now
+
+
+def test_pick_slides_prefers_video_and_keeps_photos(tmp_path):
+    for name in ["item_1.mp4", "item_1.jpg",     # video slide + its cover image
+                 "item_2.jpg",                   # photo slide
+                 "item_10.webp", "item_3.mp4"]:
+        (tmp_path / name).write_bytes(b"x")
+    assert [s.name for s in p.pick_slides(tmp_path)] == \
+        ["item_1.mp4", "item_2.jpg", "item_3.mp4", "item_10.webp"]
+
+
+def test_mixed_post_note(notes, monkeypatch, tmp_path):
+    slides = [tmp_path / "item_1.mp4", tmp_path / "item_2.jpg"]
+    monkeypatch.setattr(p, "transcribe", lambda v: ("spoken words", "en"))
+    monkeypatch.setattr(p, "screen_text", lambda v, w: "video text")
+    monkeypatch.setattr(p, "image_text", lambda i, w: "photo text")
+    seen = {}
+    def fake_ai(prompt):
+        seen["prompt"] = prompt
+        return {"title": "Mixed", "category": "tech", "summary": "s", "key_points": [],
+                "resources": [], "action_items": ["a"], "tags": []}
+    monkeypatch.setattr(p, "ask_ollama_json", fake_ai)
+    path, data = p.process_videos(slides, "https://x/p/1")
+    assert (data["video_count"], data["photo_count"]) == (1, 1)
+    assert "[Slide 2 · photo]" in seen["prompt"] and "photo text" in seen["prompt"]
+    assert "- Slides: 2 (1 video, 1 photo)" in path.read_text(encoding="utf-8")
+
+
+def test_slide_summary():
+    assert p.slide_summary({"video_count": 4, "photo_count": 0}) == "4 videos"
+    assert p.slide_summary({"video_count": 0, "photo_count": 3}) == "3 photos"
