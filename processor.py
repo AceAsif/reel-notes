@@ -117,10 +117,17 @@ Return ONLY a JSON object with these keys:
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of short, concrete things I should do (start each with a verb,
-  e.g. "Find the Strix GitHub repo and read its README", "Test X on one of my own projects").
-  Only include actions supported by the video. If the video makes big claims
-  (free tokens, "official", etc.), add one action to verify the claim first.
+- "action_items": list of objects {"text": "...", "priority": "high" | "normal" | "low"}.
+  "text" is a short, concrete thing I should do, starting with a verb,
+  e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
+  Priority: "high" = specific, quick (under ~30 min) and clearly useful;
+  "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
+- "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
+  at face value: big numbers or results ("7 billion free tokens", "10x faster"),
+  "free"/"official"/"secret"/guaranteed claims, research or statistics with no source,
+  and posts that mainly promote a paid product, course or "DM me" offer.
+  "claim" = what was said (short), "why" = why to check it (one short sentence).
+  Use [] if nothing needs checking. Never more than 4.
 - "quote", "lesson", "habit": ONLY when category is "motivation" (use "" otherwise):
   - "quote": the single most powerful sentence from the video, copied WORD FOR WORD
     from the transcript or caption (do not reword it). "" if nothing stands out.
@@ -164,6 +171,60 @@ def ask_ollama_json(prompt: str) -> dict:
     except (json.JSONDecodeError, KeyError):
         data = {}
     return data if isinstance(data, dict) else {}
+
+
+# ---- Priorities and claim check -------------------------------------------
+
+PRIORITY_ICON = {"high": "🔥 ", "normal": "", "low": "🔽 "}
+PRIORITY_ORDER = {"high": 0, "normal": 1, "low": 2}
+
+
+def clean_actions(items) -> list[dict]:
+    """Accept what the AI returns (objects or plain strings) → [{text, priority}]."""
+    result = []
+    for item in items or []:
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("action") or "").strip()
+            priority = str(item.get("priority", "normal")).lower().strip()
+        else:
+            text, priority = str(item).strip(), "normal"
+        if text:
+            result.append({"text": text, "priority": priority
+                           if priority in PRIORITY_ICON else "normal"})
+    return result
+
+
+def clean_claims(items) -> list[dict]:
+    result = []
+    for item in items or []:
+        if isinstance(item, dict) and str(item.get("claim", "")).strip():
+            result.append({"claim": str(item["claim"]).strip().strip("\"'“”"),
+                           "why": str(item.get("why", "")).strip()})
+        elif isinstance(item, str) and item.strip():
+            result.append({"claim": item.strip(), "why": ""})
+    return result[:4]
+
+
+def action_line(action: dict) -> str:
+    """'- [ ] 🔥 Do the thing' — the icon after the checkbox stores the priority."""
+    return f"- [ ] {PRIORITY_ICON[action['priority']]}{action['text']}"
+
+
+def split_priority(text: str) -> tuple[str, str]:
+    """'🔥 Do the thing' -> ('high', 'Do the thing')."""
+    for level, icon in PRIORITY_ICON.items():
+        if icon and text.startswith(icon):
+            return level, text[len(icon):]
+    return "normal", text
+
+
+def claims_lines(data: dict) -> list[str]:
+    if not data.get("claims"):
+        return []
+    lines = ["## Claims to check"]
+    for c in data["claims"]:
+        lines.append(f"- ⚠️ \"{c['claim']}\"" + (f" — {c['why']}" if c["why"] else ""))
+    return lines + [""]
 
 
 def clean_motivation_fields(data: dict, source_text: str) -> None:
@@ -210,7 +271,8 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     data.setdefault("summary", "")
     data.setdefault("key_points", [])
     data.setdefault("resources", [])
-    data.setdefault("action_items", [])
+    data["action_items"] = clean_actions(data.get("action_items", []))
+    data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
@@ -380,6 +442,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         data["summary"],
         "",
         *motivation_lines(data),
+        *claims_lines(data),
         "## Key points",
         *[f"- {p}" for p in data["key_points"]],
         "",
@@ -389,7 +452,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
     lines += [
         "",
         "## Action items",
-        *[f"- [ ] {a}" for a in data["action_items"]],
+        *[action_line(a) for a in data["action_items"]],
         "",
         "## Transcript",
         transcript or "(no speech)",
@@ -532,10 +595,9 @@ def fenced(text: str) -> list[str]:
 
 
 def open_actions() -> list[dict]:
-    """Every unticked '- [ ]' action across all notes, in a stable numbered order.
-
-    New notes sort after old ones (file names start with the date),
-    so existing numbers don't shift when you add a reel.
+    """Every unticked '- [ ]' action across all notes, numbered in this order:
+    🔥 high first, then normal, then 🔽 low; oldest note first within each.
+    /todo, /done, /skip and /high all use this same order, so numbers match.
     """
     results = []
     if not NOTES_DIR.exists():
@@ -549,9 +611,22 @@ def open_actions() -> list[dict]:
                 section = line[3:].strip()
             # Only real action items count, not "- [ ]" text inside a transcript/caption
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
+                priority, text = split_priority(line[6:].strip())
                 results.append({"path": note, "line": i, "title": title,
-                                "action": line[6:].strip()})
+                                "action": text, "priority": priority})
+    results.sort(key=lambda a: PRIORITY_ORDER[a["priority"]])  # stable: keeps note order
     return results
+
+
+def set_priority(numbers: list[int], level: str) -> list[str]:
+    """Change the priority of actions by their /todo number."""
+    actions = open_actions()
+    chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
+    for a in chosen:
+        lines = a["path"].read_text(encoding="utf-8").splitlines()
+        lines[a["line"]] = "- [ ] " + PRIORITY_ICON[level] + a["action"]
+        a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [a["action"] for a in chosen]
 
 
 def tags_line(tags: list[str]) -> str:
@@ -625,7 +700,7 @@ def tag_untagged_notes() -> list[tuple[str, list[str]]]:
 
 
 SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
-                  "Key quote": 3, "Main lesson": 3, "Habit to try": 2,
+                  "Key quote": 3, "Main lesson": 3, "Habit to try": 2, "Claims to check": 2,
                   "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 

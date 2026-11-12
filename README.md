@@ -41,6 +41,7 @@ Reel video ───────────────────────
 | `/start` | Shows your Telegram user ID |
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
+| `/high 3`, `/low 3`, `/normal 3` | Change an action's priority. `/todo` lists 🔥 high first, then normal, then 🔽 low |
 | `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
 | `/notes` | Lists your 10 newest notes |
@@ -49,6 +50,10 @@ Reel video ───────────────────────
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
+
+**Action priorities.** The AI marks each action 🔥 high (specific, quick, clearly useful), normal, or 🔽 low (optional, vague, or "follow the creator"). The icon is saved in the note (`- [ ] 🔥 ...`), and you can change it with `/high`, `/normal` and `/low`.
+
+**Claim check.** A `⚠️ Claims to check` section flags things not to take at face value: big numbers ("7 billion free tokens"), "free/official/secret" claims, statistics with no source, and posts that mainly sell a product, course or "DM me" offer. The bot can't check facts by itself; it tells you what to verify.
 
 **Motivation reels get their own style.** On top of the summary and key points, the note has:
 

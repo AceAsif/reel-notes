@@ -57,8 +57,14 @@ def format_reply(data: dict, note_path: Path) -> str:
     if data["resources"]:
         parts += ["", "Resources:"]
         parts += [f"• {processor.resource_line(r, data['category'])}" for r in data["resources"]]
+    if data.get("claims"):
+        parts += ["", "⚠️ Claims to check:"]
+        parts += [f"• “{c['claim']}”" + (f" — {c['why']}" if c["why"] else "")
+                  for c in data["claims"]]
     if data["action_items"]:
-        parts += ["", "✅ Action items:", *[f"☐ {a}" for a in data["action_items"]]]
+        parts += ["", "✅ Action items:"]
+        parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}{a['text']}"
+                  for a in data["action_items"]]
     parts += ["", f"Saved: {note_path.name}"]
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
 
@@ -156,15 +162,19 @@ def actions_text() -> str:
     actions = processor.open_actions()
     if not actions:
         return "🎉 No open action items."
+    headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
     lines = [f"You have {len(actions)} open action items:"]
-    current_title = None
+    current_priority, current_title = None, None
     for n, a in enumerate(actions, start=1):
-        if a["title"] != current_title:  # group under each reel's title
+        if a["priority"] != current_priority:   # priority section
+            current_priority, current_title = a["priority"], None
+            lines += ["", f"━━ {headings[a['priority']]} ━━"]
+        if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
-            lines += ["", f"📌 {current_title}"]
+            lines += [f"📌 {current_title}"]
         lines.append(f"{n}. ☐ {a['action']}")
     lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)",
-              "Not doing one? /skip 3"]
+              "Not doing one? /skip 3   Change priority: /high 3  /low 3  /normal 3"]
     text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:3900] + "\n...\n\nList too long, tick some off with /done first."
@@ -205,6 +215,38 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/skip 3 drops an action you've decided not to do (kept in the note as [-])."""
     await mark_actions(update, context, "-", "skip", "⏭ Skipped:")
+
+
+async def change_priority(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          level: str) -> None:
+    """Shared code for /high, /normal and /low."""
+    if not is_allowed(update):
+        return
+    numbers = [int(x) for x in re.findall(r"\d+", " ".join(context.args or []))]
+    if not numbers:
+        await update.message.reply_text(
+            f"Usage: /{level} 3  or  /{level} 1 4  (numbers come from /todo)")
+        return
+    changed = processor.set_priority(numbers, level)
+    if not changed:
+        await update.message.reply_text("No matching numbers. Send /todo to see the list.")
+        return
+    icon = {"high": "🔥", "normal": "▫️", "low": "🔽"}[level]
+    reply = [f"{icon} Now {level} priority:", *[f"• {t}" for t in changed], "",
+             "The list order has changed, so send /todo before your next command."]
+    await update.message.reply_text("\n".join(reply))
+
+
+async def high(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await change_priority(update, context, "high")
+
+
+async def normal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await change_priority(update, context, "normal")
+
+
+async def low(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await change_priority(update, context, "low")
 
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -370,6 +412,9 @@ def main() -> None:
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("done", done))
     app.add_handler(CommandHandler("skip", skip))
+    app.add_handler(CommandHandler("high", high))
+    app.add_handler(CommandHandler("normal", normal))
+    app.add_handler(CommandHandler("low", low))
     app.add_handler(CommandHandler("search", search))
     app.add_handler(CommandHandler("note", note))
     app.add_handler(CommandHandler("notes", notes_list))
