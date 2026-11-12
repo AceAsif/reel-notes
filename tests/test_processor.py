@@ -156,3 +156,23 @@ def test_weekly_stats_ignores_old_notes(notes):
                    encoding="utf-8")
     s = p.weekly_stats()
     assert s["saved"] == 0 and s["done"] == 0
+
+
+def test_nudge_prefers_high_and_rotates(notes):
+    from datetime import date
+    make_note(actions=["n1", {"text": "h1", "priority": "high"},
+                       {"text": "h2", "priority": "high"}])
+    picks = {p.pick_nudge(today=date(2026, 1, d))["action"] for d in (1, 2)}
+    assert picks == {"h1", "h2"}                     # only high ones, rotating daily
+    first = p.pick_nudge(today=date(2026, 1, 1))
+    nxt = p.pick_nudge(after=p.action_id(first))
+    assert nxt["action"] != first["action"]
+
+
+def test_find_action_and_tick_by_id(notes):
+    make_note(actions=["a", "b"])
+    a = p.open_actions()[1]
+    n, found = p.find_action(p.action_id(a))
+    assert n == 2 and found["action"] == "b"
+    p.complete_actions([n])
+    assert p.find_action(p.action_id(a)) is None     # done now

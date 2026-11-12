@@ -848,3 +848,38 @@ def weekly_stats(today: date | None = None, days: int = 7) -> dict:
     stats["open_high"] = sum(a["priority"] == "high" for a in actions)
     stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
     return stats
+
+
+# ---- daily nudge ----------------------------------------------------------
+
+def action_id(action: dict) -> str:
+    """Short, stable id for an action (fits in a Telegram button):
+    first 8 characters of the note's file-name hash + the line number."""
+    import hashlib
+    return hashlib.md5(action["path"].name.encode()).hexdigest()[:8] + ":" + str(action["line"])
+
+
+def find_action(aid: str) -> tuple[int, dict] | None:
+    """(position in /todo order starting at 1, action) for an id, or None if
+    it's already done/skipped/deleted."""
+    for n, a in enumerate(open_actions(), start=1):
+        if action_id(a) == aid:
+            return n, a
+    return None
+
+
+def pick_nudge(after: str | None = None, today: date | None = None) -> dict | None:
+    """Today's one action: from the highest priority level that has any,
+    rotating day by day so an ignored action doesn't block the rest.
+    With `after`, return the next action in the list instead ('Another one')."""
+    actions = open_actions()
+    if not actions:
+        return None
+    if after:
+        ids = [action_id(a) for a in actions]
+        i = ids.index(after) + 1 if after in ids else 0
+        return actions[i % len(actions)]
+    top = actions[0]["priority"]
+    bucket = [a for a in actions if a["priority"] == top]
+    day = (today or date.today()).toordinal()
+    return bucket[day % len(bucket)]
