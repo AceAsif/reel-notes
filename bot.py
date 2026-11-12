@@ -73,10 +73,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
-        "Send me a reel link or a reel video and I'll turn it into a note.\n"
-        "/todo shows your open action items, /done 2 ticks one off, /skip 3 drops one.\n"
-        "/search strix finds notes, /notes lists the latest, /note 1 opens one.\n"
-        "/tags lists your tags, /tag python filters by one."
+        "Send me a reel link, a carousel post link or a video and I'll turn it into a note.\n\n"
+        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /nudge  /stats\n"
+        "Notes: /notes  /note 1  /file 1  /search strix\n"
+        "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
+        "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
 
 
