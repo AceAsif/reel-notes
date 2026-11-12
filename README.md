@@ -50,6 +50,12 @@ Reel video ───────────────────────
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
 
+**Motivation reels get their own style.** On top of the summary and key points, the note has:
+
+- 💬 **Key quote**: the strongest sentence, word for word. If the AI reworded it, it's marked *(paraphrased)*, because the bot checks the quote against the transcript.
+- 💡 **Main lesson**: one plain sentence.
+- 🔁 **Habit to try**: one small, specific habit. It appears in `/todo`, so you can tick it off with `/done`.
+
 **The post caption is read too**, because creators often put links and details there. It's given to the AI, saved in the note under `## Post caption`, and links in it count as real (not invented).
 
 **GitHub repos are looked up automatically** for tech and programming reels. A tool named in the reel (e.g. "Claude mem") is matched to its real repo, using a repo shown on screen first and then GitHub search. Only an exact name match is accepted, so the bot doesn't link the wrong repo. The note gets the real link, ⭐ stars and the repo's description:

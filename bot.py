@@ -45,6 +45,13 @@ def format_reply(data: dict, note_path: Path) -> str:
     if data.get("tags"):
         parts.append("🏷 " + " ".join(f"#{t}" for t in data["tags"]))
     parts += ["", data["summary"]]
+    if data.get("quote"):
+        tail = "" if data.get("quote_exact") else "  (paraphrased)"
+        parts += ["", f"💬 “{data['quote']}”{tail}"]
+    if data.get("lesson"):
+        parts += ["", f"💡 Lesson: {data['lesson']}"]
+    if data.get("habit"):
+        parts += ["", f"🔁 Habit to try: {data['habit']}"]
     if data["key_points"]:
         parts += ["", "Key points:", *[f"• {p}" for p in data["key_points"]]]
     if data["resources"]:

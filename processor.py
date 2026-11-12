@@ -121,6 +121,12 @@ Return ONLY a JSON object with these keys:
   e.g. "Find the Strix GitHub repo and read its README", "Test X on one of my own projects").
   Only include actions supported by the video. If the video makes big claims
   (free tokens, "official", etc.), add one action to verify the claim first.
+- "quote", "lesson", "habit": ONLY when category is "motivation" (use "" otherwise):
+  - "quote": the single most powerful sentence from the video, copied WORD FOR WORD
+    from the transcript or caption (do not reword it). "" if nothing stands out.
+  - "lesson": the main lesson in ONE plain sentence.
+  - "habit": ONE small, specific habit to try, saying when or how often,
+    e.g. "Every Monday, pick one task slightly harder than last week's and finish it."
 
 TRANSCRIPT:
 <<TRANSCRIPT>>
@@ -160,6 +166,20 @@ def ask_ollama_json(prompt: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def clean_motivation_fields(data: dict, source_text: str) -> None:
+    """Keep quote/lesson/habit only for motivation reels, and check the quote
+    really appears in the video (AI models like to 'improve' quotes)."""
+    for key in ("quote", "lesson", "habit"):
+        value = data.get(key, "")
+        data[key] = value.strip() if isinstance(value, str) else ""
+    if data.get("category") != "motivation":
+        data["quote"] = data["lesson"] = data["habit"] = ""
+        return
+    data["quote"] = data["quote"].strip("\"'“”‘’ ")
+    # Exact quote = its letters appear in the transcript/caption, ignoring punctuation
+    data["quote_exact"] = bool(data["quote"]) and squash(data["quote"]) in squash(source_text)
+
+
 def clean_tags(tags) -> list[str]:
     """'#AI Tools', 'Python ' -> ['ai-tools', 'python']; max 6, no duplicates."""
     if isinstance(tags, str):
@@ -191,6 +211,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     data.setdefault("key_points", [])
     data.setdefault("resources", [])
     data.setdefault("action_items", [])
+    clean_motivation_fields(data, transcript + "\n" + caption)
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
     data["resources"] = enrich_with_github(data["resources"], data["category"],
@@ -358,6 +379,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         "## Summary",
         data["summary"],
         "",
+        *motivation_lines(data),
         "## Key points",
         *[f"- {p}" for p in data["key_points"]],
         "",
@@ -487,6 +509,19 @@ def find_note_by_source(url: str) -> Path | None:
     return None
 
 
+def motivation_lines(data: dict) -> list[str]:
+    """Extra sections for motivation reels: quote, lesson, habit."""
+    lines = []
+    if data.get("quote"):
+        note = "" if data.get("quote_exact") else "  *(paraphrased)*"
+        lines += ["## Key quote", f"> {data['quote']}{note}", ""]
+    if data.get("lesson"):
+        lines += ["## Main lesson", data["lesson"], ""]
+    if data.get("habit"):
+        lines += ["## Habit to try", f"- [ ] {data['habit']}", ""]
+    return lines
+
+
 def fenced(text: str) -> list[str]:
     """Wrap raw OCR text in a code block so stray symbols ('* ', '| ', '---')
     aren't read as Markdown lists/tables/headings. The fence is longer than any
@@ -513,7 +548,7 @@ def open_actions() -> list[dict]:
             if line.startswith("## "):
                 section = line[3:].strip()
             # Only real action items count, not "- [ ]" text inside a transcript/caption
-            elif section == "Action items" and line.startswith("- [ ] "):
+            elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 results.append({"path": note, "line": i, "title": title,
                                 "action": line[6:].strip()})
     return results
@@ -590,6 +625,7 @@ def tag_untagged_notes() -> list[tuple[str, list[str]]]:
 
 
 SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
+                  "Key quote": 3, "Main lesson": 3, "Habit to try": 2,
                   "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 
