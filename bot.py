@@ -359,6 +359,24 @@ async def tag_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.message.reply_text(tag_results_text(name, context))
 
 
+async def renametag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/renametag claudie claude  renames (or merges) a tag in every note."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if len(args) != 2:
+        await update.message.reply_text(
+            "Usage: /renametag old new   e.g. /renametag claudie claude\n"
+            "If notes already use the new tag, the two are merged.")
+        return
+    count = processor.rename_tag(args[0], args[1])
+    old, new = args[0].lstrip("#").lower(), args[1].lstrip("#").lower()
+    if count == 0:
+        await update.message.reply_text(f"🏷 No notes tagged #{old}. See all tags with /tags")
+    else:
+        await update.message.reply_text(f"🏷 Renamed #{old} → #{new} in {count} note(s).")
+
+
 async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/tags lists all tags with how many notes use each."""
     if not is_allowed(update):
@@ -422,6 +440,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))
+    app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 

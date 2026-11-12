@@ -126,3 +126,12 @@ def test_low_priority_fallback(text, expected):
 
 def test_min_search_stars_blocks_small_namesake():
     assert p.MIN_SEARCH_STARS >= 100
+
+
+def test_rename_tag_and_merge(notes):
+    a = make_note(title="A", source="https://x/a", tags=["claudie", "github"])
+    b = make_note(title="B", source="https://x/b", tags=["claudie", "claude"])
+    assert p.rename_tag("#Claudie", "claude") == 2
+    assert p.read_tags(a) == ["claude", "github"]
+    assert p.read_tags(b) == ["claude"]            # merged, no duplicate
+    assert p.rename_tag("missing", "x") == 0

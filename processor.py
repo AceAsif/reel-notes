@@ -652,6 +652,29 @@ def tags_line(tags: list[str]) -> str:
     return "- Tags: " + " ".join(f"#{t}" for t in tags)
 
 
+def rename_tag(old: str, new: str) -> int:
+    """Rename a tag in every note (e.g. 'claudie' -> 'claude').
+    If a note already has the new tag, the two are merged. Returns notes changed."""
+    old_c, new_c = clean_tags([old]), clean_tags([new])
+    if not old_c or not new_c or not NOTES_DIR.exists():
+        return 0
+    old, new = old_c[0], new_c[0]
+    changed = 0
+    for path in NOTES_DIR.glob("*.md"):
+        tags = read_tags(path)
+        if old not in tags:
+            continue
+        merged = clean_tags([new if t == old else t for t in tags])  # also removes duplicates
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines[:12]):
+            if line.startswith("- Tags:"):
+                lines[i] = tags_line(merged)
+                break
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        changed += 1
+    return changed
+
+
 def read_tags(path: Path) -> list[str]:
     """Tags from a note's '- Tags: #a #b' line (empty list for old notes)."""
     for line in path.read_text(encoding="utf-8").splitlines()[:12]:
