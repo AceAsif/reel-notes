@@ -111,3 +111,18 @@ def test_motivation_habit_counts_as_action(notes):
     make_note(category="motivation", actions=["act"], quote="q", lesson="l",
               habit="Every Monday, do X", quote_exact=True)
     assert "Every Monday, do X" in [a["action"] for a in p.open_actions()]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Check the broadcast channel and Telegram from the bio for the plugins", "low"),
+    ("Comment CLAUDE below to get the list", "low"),
+    ("Follow the creator for more tips", "low"),
+    ("Follow the instructions to install and load a local model", "high"),
+    ("Read the Strix README", "high"),
+])
+def test_low_priority_fallback(text, expected):
+    assert p.clean_actions([{"text": text, "priority": "high"}])[0]["priority"] == expected
+
+
+def test_min_search_stars_blocks_small_namesake():
+    assert p.MIN_SEARCH_STARS >= 100

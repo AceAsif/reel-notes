@@ -117,15 +117,19 @@ Return ONLY a JSON object with these keys:
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of objects {"text": "...", "priority": "high" | "normal" | "low"}.
+- "action_items": list of 3-6 objects {"text": "...", "priority": "high" | "normal" | "low"}.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
+  When the video names several tools, give each useful tool its own action.
   Priority: "high" = specific, quick (under ~30 min) and clearly useful;
   "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
 - "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
   at face value: big numbers or results ("7 billion free tokens", "10x faster"),
   "free"/"official"/"secret"/guaranteed claims, research or statistics with no source,
   and posts that mainly promote a paid product, course or "DM me" offer.
+  ALWAYS include: anything called "official" (e.g. "an official Anthropic plugin"),
+  and "comment X and I'll DM you" / "link in bio" / "check my channel" offers
+  (why: engagement bait; get the tool from its real source instead).
   "claim" = what was said (short), "why" = why to check it (one short sentence).
   Use [] if nothing needs checking. Never more than 4.
 - "quote", "lesson", "habit": ONLY when category is "motivation" (use "" otherwise):
@@ -188,10 +192,22 @@ def clean_actions(items) -> list[dict]:
             priority = str(item.get("priority", "normal")).lower().strip()
         else:
             text, priority = str(item).strip(), "normal"
-        if text:
-            result.append({"text": text, "priority": priority
-                           if priority in PRIORITY_ICON else "normal"})
+        if not text:
+            continue
+        if priority not in PRIORITY_ICON:
+            priority = "normal"
+        # Small models often skip priorities: actions that only send you to the
+        # creator (bio, DM, comment, follow, channel) are always low.
+        if LOW_PRIORITY_RE.search(text):
+            priority = "low"
+        result.append({"text": text, "priority": priority})
     return result
+
+
+LOW_PRIORITY_RE = re.compile(
+    r"\b(bio|dm|dms|comment \"?\w+\"? (below|to)|follow (the |this )?(creator|author|account|page)|"
+    r"broadcast channel|telegram channel|(creator|author)'?s? (channel|page|profile)|link in)\b",
+    re.I)
 
 
 def clean_claims(items) -> list[dict]:
@@ -287,7 +303,10 @@ GITHUB_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", re
 INSTALL_CMD_RE = re.compile(
     r"npx\s+(?:-y\s+)?skills\s+add\s+([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)((?:\s+--skill\s+[\w-]+)*)",
     re.I)
-MIN_SEARCH_STARS = 50
+# A repo found only by name search must be this popular, so a small personal
+# repo with the same name (e.g. a 68-star "claude-code-setup") isn't linked by mistake.
+# Repos shown in the video or caption, or in an install command, don't need this.
+MIN_SEARCH_STARS = 300
 GENERIC_WORDS = r"\b(github|repo|repository|plugin|skill|tool|library|framework|the|app)\b"
 
 
