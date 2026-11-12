@@ -75,6 +75,23 @@ Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI 
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
 
+## Notes on your phone
+
+**Quick:** send `/file 1` to get a note as a `.md` file in Telegram (after `/notes`, `/search` or `/tag`, the number picks from that list). Open it on your phone, or save or share it.
+
+**All notes, always in sync:** keep the `notes` folder inside a cloud folder that syncs to your phone.
+
+1. Stop the bot (tray icon → **Quit**).
+2. Move the `notes` folder into your cloud folder, e.g. `C:\Users\<you>\OneDrive\ReelNotes` (OneDrive) or `G:\My Drive\ReelNotes` (Google Drive for desktop).
+3. In `.env`, set the full path:
+   ```
+   NOTES_DIR=C:\Users\<you>\OneDrive\ReelNotes
+   ```
+4. Start the bot again. New notes are saved there, and `/todo`, `/search` and the rest keep working.
+5. On your phone, open the **OneDrive** or **Google Drive** app. Notes are plain text files, so any text viewer opens them. A Markdown app (e.g. Obsidian, Markor) shows the headings and checkboxes nicely.
+
+Edit notes on your phone carefully. Ticking a box (`- [ ]` → `- [x]`) is fine, but keep the `## Action items` heading, because the bot uses it to find your actions.
+
 ## Requirements
 
 - Windows, macOS or Linux

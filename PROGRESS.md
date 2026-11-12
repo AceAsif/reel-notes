@@ -1,6 +1,6 @@
 # Progress - Build remaining Reel Notes features
 Branch: feature/remaining-features
-Last updated: 2026-11-13 00:40 (Hobart)
+Last updated: 2026-11-13 00:50 (Hobart)
 
 ## Plan (in this order)
 1. Add tests, tidy duplicate env.example
@@ -25,13 +25,16 @@ Last updated: 2026-11-13 00:40 (Hobart)
 
 - Step 6: Photo slides in carousels: yt-dlp keeps slides with no video (ignore_no_formats_error) and saves each slide's photo (writethumbnail); photos are OCR'd and labelled [Slide N · photo]; photo-only posts now work too (3 new tests)
 
+- Step 7: /file N sends a note as a .md file in Telegram; README section 'Notes on your phone' (OneDrive / Google Drive sync via NOTES_DIR)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 7: notes on phone: /file N command to get a note as a file + README guide to sync the notes folder with OneDrive/Google Drive
+- Step 8: final README commands table, /start help text, BotFather command list
 
 ## Decisions
+- Phone sync uses the existing NOTES_DIR setting plus OneDrive/Google Drive, with no new code or accounts. The user's notes are NOT moved automatically, because they're private data; the README explains how.
 - Photo slides use yt-dlp's thumbnail of each slide, which for Instagram is the full photo (image_versions2). Checked in yt-dlp's source; still needs a real test on the user's PC.
 - Nudge buttons identify actions by a short file hash + line number, so they still work after /todo numbers change. NUDGE_TIME=off turns the nudge off.
 - Done/skip dates use Obsidian Tasks format (✅/❌ YYYY-MM-DD) so the notes also work with the Obsidian Tasks plugin. Actions ticked before this change have no date and aren't counted in stats.

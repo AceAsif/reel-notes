@@ -291,6 +291,27 @@ async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
 
 
+async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/file 2 sends note 2 (from your last /search, /notes or /tag) as a .md file,
+    so you can open, save or share it on your phone."""
+    if not is_allowed(update):
+        return
+    paths = context.user_data.get("last_results")
+    if not paths:  # nothing searched yet: use the newest notes
+        files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
+            if processor.NOTES_DIR.exists() else []
+        paths = [str(f) for f in files]
+    numbers = re.findall(r"\d+", " ".join(context.args or []))
+    n = int(numbers[0]) if numbers else 1
+    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
+        await update.message.reply_text("No note with that number. Run /notes or /search first.")
+        return
+    path = Path(paths[n - 1])
+    with path.open("rb") as f:
+        await update.message.reply_document(document=f, filename=path.name,
+                                            caption=f"📄 {path.stem[16:] or path.stem}")
+
+
 async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/notes shows your 10 newest notes."""
     if not is_allowed(update):
@@ -533,6 +554,7 @@ def main() -> None:
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("file", send_file))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 
