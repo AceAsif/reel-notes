@@ -405,9 +405,34 @@ async def retag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text("\n".join(lines)[:4000])
 
 
+def stats_text() -> str:
+    s = processor.weekly_stats()
+    lines = [f"📊 Last 7 days ({s['start']:%d %b} – {s['end']:%d %b})", "",
+             f"🎬 Reels saved: {s['saved']}"]
+    if s["categories"]:
+        lines.append("    " + ", ".join(f"{n} {c}" for c, n in
+                                        sorted(s["categories"].items(), key=lambda kv: -kv[1])))
+    lines += [f"✅ Actions done: {s['done']}", f"⏭ Actions skipped: {s['skipped']}",
+              f"📋 Still open: {s['open']}" + (f" ({s['open_high']} 🔥 high)" if s["open_high"] else "")]
+    if s["top_tags"]:
+        lines.append("🏷 Top topics: " + "  ".join(f"#{t} ({n})" for t, n in s["top_tags"]))
+    if s["done"] == 0 and s["open"]:
+        lines += ["", "💪 Nothing ticked off this week. Pick one 🔥 item and do it today!"]
+    elif s["done"] >= 5:
+        lines += ["", "🎉 Great week, keep it going!"]
+    return "\n".join(lines)
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stats shows the last 7 days."""
+    if is_allowed(update):
+        await update.message.reply_text(stats_text())
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
-        chat_id=context.job.chat_id, text="📅 Weekly review\n\n" + actions_text()
+        chat_id=context.job.chat_id,
+        text=("📅 Weekly review\n\n" + stats_text() + "\n\n" + actions_text())[:4000],
     )
 
 
@@ -441,6 +466,7 @@ def main() -> None:
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(CommandHandler("renametag", renametag))
+    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 

@@ -135,3 +135,24 @@ def test_rename_tag_and_merge(notes):
     assert p.read_tags(a) == ["claude", "github"]
     assert p.read_tags(b) == ["claude"]            # merged, no duplicate
     assert p.rename_tag("missing", "x") == 0
+
+
+def test_done_date_and_weekly_stats(notes):
+    from datetime import date
+    path = make_note(actions=["a", "b", "c"], tags=["python"])
+    p.complete_actions([1])            # done today
+    p.complete_actions([1], "-")       # skipped today
+    text = path.read_text(encoding="utf-8")
+    today = date.today().isoformat()
+    assert f"- [x] a ✅ {today}" in text and f"- [-] b ❌ {today}" in text
+    s = p.weekly_stats()
+    assert (s["saved"], s["done"], s["skipped"], s["open"]) == (1, 1, 1, 1)
+    assert s["categories"] == {"tech": 1} and s["top_tags"] == [("python", 1)]
+
+
+def test_weekly_stats_ignores_old_notes(notes):
+    old = notes / "2020-01-01_0000_old.md"
+    old.write_text("# Old\n\n- Category: tech\n\n## Action items\n- [x] x ✅ 2020-01-01\n",
+                   encoding="utf-8")
+    s = p.weekly_stats()
+    assert s["saved"] == 0 and s["done"] == 0

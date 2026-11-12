@@ -1,6 +1,6 @@
 # Progress - Build remaining Reel Notes features
 Branch: feature/remaining-features
-Last updated: 2026-11-13 00:00 (Hobart)
+Last updated: 2026-11-13 00:10 (Hobart)
 
 ## Plan (in this order)
 1. Add tests, tidy duplicate env.example
@@ -19,13 +19,16 @@ Last updated: 2026-11-13 00:00 (Hobart)
 
 - Step 3: /renametag old new - renames or merges a tag in every note (1 new test)
 
+- Step 4: Ticked actions now get a date (✅ done / ❌ skipped, Obsidian Tasks style); weekly_stats() + /stats command; Sunday digest starts with the stats (2 new tests)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 4: save done dates on ticked actions and add weekly stats to the Sunday digest
+- Step 5: daily nudge each morning (one action, high priority first) + /nudge command
 
 ## Decisions
+- Done/skip dates use Obsidian Tasks format (✅/❌ YYYY-MM-DD) so the notes also work with the Obsidian Tasks plugin. Actions ticked before this change have no date and aren't counted in stats.
 - Search-only repo matches need 300+ stars: the 68-star 'claude-code-setup' was wrong; repos shown in the video/caption are still trusted.
 - 'Follow' only counts as low priority for 'follow the creator', not 'follow the instructions'.
 - Work on a feature branch; the user merges the Pull Request.
