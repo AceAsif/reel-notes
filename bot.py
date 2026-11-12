@@ -39,8 +39,8 @@ def is_allowed(update: Update) -> bool:
 def format_reply(data: dict, note_path: Path) -> str:
     lang = data.get("language", "en")
     lang_tag = f"  🌐 {lang}→en" if lang != "en" else ""
-    if data.get("video_count", 1) > 1:
-        lang_tag += f"  🎞 {data['video_count']} videos"
+    if processor.slide_total(data) > 1:
+        lang_tag += f"  🎞 {processor.slide_summary(data)}"
     parts = [f"📝 {data['title']}  [{data['category']}]{lang_tag}"]
     if data.get("tags"):
         parts.append("🏷 " + " ".join(f"#{t}" for t in data["tags"]))
@@ -73,10 +73,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
-        "Send me a reel link or a reel video and I'll turn it into a note.\n"
-        "/todo shows your open action items, /done 2 ticks one off, /skip 3 drops one.\n"
-        "/search strix finds notes, /notes lists the latest, /note 1 opens one.\n"
-        "/tags lists your tags, /tag python filters by one."
+        "Send me a reel link, a carousel post link or a video and I'll turn it into a note.\n\n"
+        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /nudge  /stats\n"
+        "Notes: /notes  /note 1  /file 1  /search strix\n"
+        "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
+        "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
 
 
@@ -140,9 +141,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         with tempfile.TemporaryDirectory() as tmp:
             videos, caption = await asyncio.to_thread(processor.download_media, url, Path(tmp))
             if len(videos) > 1:
+                photos = sum(v.suffix.lower() in processor.IMAGE_EXTS for v in videos)
+                kinds = processor.slide_summary(
+                    {"video_count": len(videos) - photos, "photo_count": photos})
                 await status.edit_text(
-                    f"Found {len(videos)} videos in this post ⏳ Processing all of them "
-                    f"(about {len(videos)} min)...")
+                    f"Found {kinds} in this post ⏳ Processing all of them "
+                    f"(about {len(videos) - photos + 1} min)...")
             else:
                 await status.edit_text("Downloaded ⏳ Processing...")
             note_path, data = await asyncio.to_thread(
@@ -288,6 +292,27 @@ async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
 
 
+async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/file 2 sends note 2 (from your last /search, /notes or /tag) as a .md file,
+    so you can open, save or share it on your phone."""
+    if not is_allowed(update):
+        return
+    paths = context.user_data.get("last_results")
+    if not paths:  # nothing searched yet: use the newest notes
+        files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
+            if processor.NOTES_DIR.exists() else []
+        paths = [str(f) for f in files]
+    numbers = re.findall(r"\d+", " ".join(context.args or []))
+    n = int(numbers[0]) if numbers else 1
+    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
+        await update.message.reply_text("No note with that number. Run /notes or /search first.")
+        return
+    path = Path(paths[n - 1])
+    with path.open("rb") as f:
+        await update.message.reply_document(document=f, filename=path.name,
+                                            caption=f"📄 {path.stem[16:] or path.stem}")
+
+
 async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/notes shows your 10 newest notes."""
     if not is_allowed(update):
@@ -359,6 +384,24 @@ async def tag_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.message.reply_text(tag_results_text(name, context))
 
 
+async def renametag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/renametag claudie claude  renames (or merges) a tag in every note."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if len(args) != 2:
+        await update.message.reply_text(
+            "Usage: /renametag old new   e.g. /renametag claudie claude\n"
+            "If notes already use the new tag, the two are merged.")
+        return
+    count = processor.rename_tag(args[0], args[1])
+    old, new = args[0].lstrip("#").lower(), args[1].lstrip("#").lower()
+    if count == 0:
+        await update.message.reply_text(f"🏷 No notes tagged #{old}. See all tags with /tags")
+    else:
+        await update.message.reply_text(f"🏷 Renamed #{old} → #{new} in {count} note(s).")
+
+
 async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/tags lists all tags with how many notes use each."""
     if not is_allowed(update):
@@ -387,9 +430,95 @@ async def retag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text("\n".join(lines)[:4000])
 
 
+NUDGE_TIME = os.getenv("NUDGE_TIME", "08:00").strip().lower()   # "off" to disable
+
+
+def nudge_message(action: dict, intro: str) -> tuple[str, InlineKeyboardMarkup]:
+    icon = processor.PRIORITY_ICON[action["priority"]]
+    text = f"{intro}\n\n{icon}{action['action']}\n\n📌 From: {action['title']}"
+    aid = processor.action_id(action)
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
+        InlineKeyboardButton("⏭ Skip", callback_data=f"nudge:skip:{aid}"),
+        InlineKeyboardButton("🔁 Another one", callback_data=f"nudge:next:{aid}"),
+    ]])
+    return text, buttons
+
+
+async def send_nudge(bot, chat_id: int, intro: str) -> None:
+    action = processor.pick_nudge()
+    if action is None:
+        await bot.send_message(chat_id, "🎉 No open actions. Send me a reel to get new ideas!")
+        return
+    text, buttons = nudge_message(action, intro)
+    await bot.send_message(chat_id, text, reply_markup=buttons)
+
+
+async def daily_nudge(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_nudge(context.bot, context.job.chat_id, "☀️ Good morning! Today's one action:")
+
+
+async def nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/nudge gives you one action to do right now."""
+    if is_allowed(update):
+        await send_nudge(context.bot, update.effective_chat.id, "🎯 One action to do now:")
+
+
+async def nudge_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Done / Skip / Another one buttons under a nudge."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    _, what, aid = query.data.split(":", 2)
+    if what == "next":
+        action = processor.pick_nudge(after=aid)
+        if action is None:
+            await query.edit_message_text("🎉 No open actions left!")
+            return
+        text, buttons = nudge_message(action, "🔁 How about this one?")
+        await query.edit_message_text(text, reply_markup=buttons)
+        return
+    found = processor.find_action(aid)
+    if found is None:
+        await query.edit_message_text("This action is already done or skipped. Try /nudge")
+        return
+    number, action = found
+    processor.complete_actions([number], "x" if what == "done" else "-")
+    left = len(processor.open_actions())
+    verb = "✅ Done" if what == "done" else "⏭ Skipped"
+    await query.edit_message_text(f"{verb}: {action['action']}\n\n{left} open items left. "
+                                  "Want another? /nudge")
+
+
+def stats_text() -> str:
+    s = processor.weekly_stats()
+    lines = [f"📊 Last 7 days ({s['start']:%d %b} – {s['end']:%d %b})", "",
+             f"🎬 Reels saved: {s['saved']}"]
+    if s["categories"]:
+        lines.append("    " + ", ".join(f"{n} {c}" for c, n in
+                                        sorted(s["categories"].items(), key=lambda kv: -kv[1])))
+    lines += [f"✅ Actions done: {s['done']}", f"⏭ Actions skipped: {s['skipped']}",
+              f"📋 Still open: {s['open']}" + (f" ({s['open_high']} 🔥 high)" if s["open_high"] else "")]
+    if s["top_tags"]:
+        lines.append("🏷 Top topics: " + "  ".join(f"#{t} ({n})" for t, n in s["top_tags"]))
+    if s["done"] == 0 and s["open"]:
+        lines += ["", "💪 Nothing ticked off this week. Pick one 🔥 item and do it today!"]
+    elif s["done"] >= 5:
+        lines += ["", "🎉 Great week, keep it going!"]
+    return "\n".join(lines)
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stats shows the last 7 days."""
+    if is_allowed(update):
+        await update.message.reply_text(stats_text())
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
-        chat_id=context.job.chat_id, text="📅 Weekly review\n\n" + actions_text()
+        chat_id=context.job.chat_id,
+        text=("📅 Weekly review\n\n" + stats_text() + "\n\n" + actions_text())[:4000],
     )
 
 
@@ -420,8 +549,13 @@ def main() -> None:
     app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
+    app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
+    app.add_handler(CommandHandler("nudge", nudge))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))
+    app.add_handler(CommandHandler("renametag", renametag))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("file", send_file))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 
@@ -433,6 +567,17 @@ def main() -> None:
             days=(0,),
             chat_id=int(ALLOWED_USER_ID),
         )
+        # Every day at NUDGE_TIME (default 08:00): one action to do today
+        if NUDGE_TIME != "off":
+            try:
+                hour, minute = (int(x) for x in NUDGE_TIME.split(":"))
+                app.job_queue.run_daily(
+                    daily_nudge,
+                    time=datetime.time(hour, minute, tzinfo=TIMEZONE),
+                    chat_id=int(ALLOWED_USER_ID),
+                )
+            except ValueError:
+                print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
 
     print("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()

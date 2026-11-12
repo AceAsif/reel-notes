@@ -37,7 +37,7 @@ Reel video ───────────────────────
 |---|---|
 | *(send a reel link)* | Downloads the reel and makes a note |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
-| *(send a carousel post link)* | Instagram posts with several videos (`instagram.com/p/...`): every video (up to 10) is processed into **one** combined note. Photo slides are skipped |
+| *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
@@ -50,6 +50,12 @@ Reel video ───────────────────────
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
+| `/renametag claudie claude` | Renames a tag in every note (merges it if the new tag is already used) |
+| `/nudge` | One action to do right now, with ✅ Done / ⏭ Skip / 🔁 Another one buttons |
+| `/stats` | The last 7 days: reels saved, actions done and skipped, top topics |
+| `/file 1` | Sends note 1 (from your last `/notes`, `/search` or `/tag`) as a `.md` file |
+
+**Automatic messages:** every morning at 8:00 a **daily nudge** sends one action, 🔥 high priority first (change the time with `NUDGE_TIME` in `.env`, or set it to `off`). Every Sunday at 9:00 a **weekly review** sends your stats and the open actions. Ticked actions get a date (`✅ 2026-11-13`, or `❌` for skipped), the same format as the Obsidian Tasks plugin.
 
 **Action priorities.** The AI marks each action 🔥 high (specific, quick, clearly useful), normal, or 🔽 low (optional, vague, or "follow the creator"). The icon is saved in the note (`- [ ] 🔥 ...`), and you can change it with `/high`, `/normal` and `/low`.
 
@@ -74,6 +80,23 @@ If there's no confident match, the note keeps a GitHub search link. This uses th
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
+
+## Notes on your phone
+
+**Quick:** send `/file 1` to get a note as a `.md` file in Telegram (after `/notes`, `/search` or `/tag`, the number picks from that list). Open it on your phone, or save or share it.
+
+**All notes, always in sync:** keep the `notes` folder inside a cloud folder that syncs to your phone.
+
+1. Stop the bot (tray icon → **Quit**).
+2. Move the `notes` folder into your cloud folder, e.g. `C:\Users\<you>\OneDrive\ReelNotes` (OneDrive) or `G:\My Drive\ReelNotes` (Google Drive for desktop).
+3. In `.env`, set the full path:
+   ```
+   NOTES_DIR=C:\Users\<you>\OneDrive\ReelNotes
+   ```
+4. Start the bot again. New notes are saved there, and `/todo`, `/search` and the rest keep working.
+5. On your phone, open the **OneDrive** or **Google Drive** app. Notes are plain text files, so any text viewer opens them. A Markdown app (e.g. Obsidian, Markor) shows the headings and checkboxes nicely.
+
+Edit notes on your phone carefully. Ticking a box (`- [ ]` → `- [x]`) is fine, but keep the `## Action items` heading, because the bot uses it to find your actions.
 
 ## Requirements
 
@@ -145,6 +168,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `NOTES_DIR` | `notes` | Where notes are saved |
 | `TIMEZONE` | `Australia/Hobart` | For the weekly reminder |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
+| `NUDGE_TIME` | `08:00` | Time for the daily nudge (24-hour), or `off` |
 | `COOKIES_FILE` | — | Only if Instagram/Facebook downloads need a login |
 | `GITHUB_TOKEN` | — | Optional. Higher GitHub API limits for repo lookups |
 
@@ -153,7 +177,8 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 - Telegram bots can only download videos up to 20 MB (links have no limit).
 - On-screen text from busy backgrounds or stylised captions can be noisy. The AI usually fixes obvious typos.
 - Instagram may sometimes block downloads without a logged-in cookies file.
-- Reel claims (free tokens, "official" plugins) are not checked. The notes include a "verify first" action for big claims.
+- Claims are flagged, not fact-checked: the `⚠️ Claims to check` section tells you what to verify yourself.
+- Carousel posts: up to 10 slides. Photo slides are read with OCR only, so text in a photo is captured but the picture itself isn't described.
 - For personal use only. Downloading reels may go against Meta's terms of service.
 
 ## Troubleshooting
@@ -192,3 +217,12 @@ Unblock-File "D:\Python projects\reel-notes\stop_bot.bat"
 - Only unblock files you have read and trust. The label protects you from malware.
 - **Don't turn off Smart App Control.** Once it's off, Windows can't turn it back on without a reset.
 - Shortcuts you create yourself never get the label, and `pythonw.exe` is a signed program, so the tray shortcut above is never blocked.
+
+## Development
+
+Run the tests (no Whisper, Ollama, Tesseract or internet needed):
+
+```
+pip install -r requirements-dev.txt
+python -m pytest
+```

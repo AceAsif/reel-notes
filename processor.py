@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -80,17 +80,7 @@ def screen_text(video: Path, workdir: Path) -> str:
          "-vf", f"fps=1/{FRAME_EVERY_SECONDS}", str(frames / "f_%03d.png")],
         check=True,
     )
-    seen, lines = set(), []
-    for img in sorted(frames.glob("*.png")):
-        for line in pytesseract.image_to_string(str(img)).splitlines():
-            line = line.strip()
-            if len(line) < 4:
-                continue
-            key = line.lower()
-            if key not in seen:
-                seen.add(key)
-                lines.append(line)
-    return "\n".join(lines)[:6000]
+    return ocr_lines(sorted(frames.glob("*.png")))
 
 
 PROMPT = """You turn short social media videos (motivation, tech, programming) into useful notes.
@@ -117,15 +107,19 @@ Return ONLY a JSON object with these keys:
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of objects {"text": "...", "priority": "high" | "normal" | "low"}.
+- "action_items": list of 3-6 objects {"text": "...", "priority": "high" | "normal" | "low"}.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
+  When the video names several tools, give each useful tool its own action.
   Priority: "high" = specific, quick (under ~30 min) and clearly useful;
   "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
 - "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
   at face value: big numbers or results ("7 billion free tokens", "10x faster"),
   "free"/"official"/"secret"/guaranteed claims, research or statistics with no source,
   and posts that mainly promote a paid product, course or "DM me" offer.
+  ALWAYS include: anything called "official" (e.g. "an official Anthropic plugin"),
+  and "comment X and I'll DM you" / "link in bio" / "check my channel" offers
+  (why: engagement bait; get the tool from its real source instead).
   "claim" = what was said (short), "why" = why to check it (one short sentence).
   Use [] if nothing needs checking. Never more than 4.
 - "quote", "lesson", "habit": ONLY when category is "motivation" (use "" otherwise):
@@ -188,10 +182,22 @@ def clean_actions(items) -> list[dict]:
             priority = str(item.get("priority", "normal")).lower().strip()
         else:
             text, priority = str(item).strip(), "normal"
-        if text:
-            result.append({"text": text, "priority": priority
-                           if priority in PRIORITY_ICON else "normal"})
+        if not text:
+            continue
+        if priority not in PRIORITY_ICON:
+            priority = "normal"
+        # Small models often skip priorities: actions that only send you to the
+        # creator (bio, DM, comment, follow, channel) are always low.
+        if LOW_PRIORITY_RE.search(text):
+            priority = "low"
+        result.append({"text": text, "priority": priority})
     return result
+
+
+LOW_PRIORITY_RE = re.compile(
+    r"\b(bio|dm|dms|comment \"?\w+\"? (below|to)|follow (the |this )?(creator|author|account|page)|"
+    r"broadcast channel|telegram channel|(creator|author)'?s? (channel|page|profile)|link in)\b",
+    re.I)
 
 
 def clean_claims(items) -> list[dict]:
@@ -287,7 +293,10 @@ GITHUB_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", re
 INSTALL_CMD_RE = re.compile(
     r"npx\s+(?:-y\s+)?skills\s+add\s+([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)((?:\s+--skill\s+[\w-]+)*)",
     re.I)
-MIN_SEARCH_STARS = 50
+# A repo found only by name search must be this popular, so a small personal
+# repo with the same name (e.g. a 68-star "claude-code-setup") isn't linked by mistake.
+# Repos shown in the video or caption, or in an install command, don't need this.
+MIN_SEARCH_STARS = 300
 GENERIC_WORDS = r"\b(github|repo|repository|plugin|skill|tool|library|framework|the|app)\b"
 
 
@@ -435,7 +444,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
         f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
-        *([f"- Videos: {data['video_count']}"] if data.get("video_count", 1) > 1 else []),
+        *([f"- Slides: {slide_summary(data)}"] if slide_total(data) > 1 else []),
         tags_line(data.get("tags", [])),
         "",
         "## Summary",
@@ -467,15 +476,22 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
     return path
 
 
-MAX_VIDEOS = 10                       # most videos taken from one carousel post
+MAX_VIDEOS = 10                       # most slides taken from one carousel post
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+
+
+def slide_position(p: Path) -> int:
+    """item_3.mp4 -> 3 (a single reel is 'item_NA' -> 0)."""
+    n = p.stem.split("_")[-1]
+    return int(n) if n.isdigit() else 0
 
 
 def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
-    """Download a reel OR every video in a carousel post.
+    """Download a reel, or every slide of a carousel post (videos AND photos).
 
-    Returns (video files in post order, the post caption).
-    Photo slides are skipped (yt-dlp only downloads videos).
+    Returns (slide files in post order, the post caption). For a video slide you
+    get the video; for a photo slide you get the image.
     """
     import yt_dlp
 
@@ -484,9 +500,13 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
         "outtmpl": str(workdir / "item_%(playlist_index)s.%(ext)s"),
         "format": "bv*+ba/b",           # best video + audio, merged by ffmpeg
         "merge_output_format": "mp4",
-        "noplaylist": False,            # carousels are "playlists": take every video
+        "noplaylist": False,            # carousels are "playlists": take every slide
         "playlistend": MAX_VIDEOS,
         "ignoreerrors": True,           # one broken slide shouldn't stop the rest
+        # Photo slides have no video. These two options keep them and save the
+        # slide's picture (its "thumbnail" is the full photo):
+        "ignore_no_formats_error": True,
+        "writethumbnail": True,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,             # no [download] lines filling bot.log
@@ -503,50 +523,97 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
             if entry and entry.get("description"):
                 caption = entry["description"]
                 break
+    return pick_slides(workdir), caption.strip()
 
-    def position(p: Path) -> int:
-        n = p.stem.split("_")[-1]
-        return int(n) if n.isdigit() else 0
 
-    videos = sorted((p for p in workdir.glob("item_*") if p.suffix.lower() in VIDEO_EXTS),
-                    key=position)
-    if not videos:
-        raise RuntimeError("No videos found in this post. Photo-only posts aren't supported yet.")
-    return videos, caption.strip()
+def pick_slides(workdir: Path) -> list[Path]:
+    """One file per slide: the video if there is one, otherwise the photo.
+    (Video slides also get a cover image saved; that one is ignored.)"""
+    by_slide: dict[int, Path] = {}
+    for p in workdir.glob("item_*"):
+        ext = p.suffix.lower()
+        pos = slide_position(p)
+        if ext in VIDEO_EXTS:
+            by_slide[pos] = p
+        elif ext in IMAGE_EXTS and pos not in by_slide:
+            by_slide[pos] = p
+    # a photo may have been seen before its video: prefer videos
+    for p in workdir.glob("item_*"):
+        if p.suffix.lower() in VIDEO_EXTS:
+            by_slide[slide_position(p)] = p
+    slides = [by_slide[k] for k in sorted(by_slide)]
+    if not slides:
+        raise RuntimeError("Nothing could be downloaded from this post.")
+    return slides
+
+
+def ocr_lines(images: list[Path]) -> str:
+    """OCR several images; keep each distinct line once."""
+    seen, lines = set(), []
+    for img in images:
+        for line in pytesseract.image_to_string(str(img)).splitlines():
+            line = line.strip()
+            if len(line) < 4:
+                continue
+            key = line.lower()
+            if key not in seen:
+                seen.add(key)
+                lines.append(line)
+    return "\n".join(lines)[:6000]
+
+
+def image_text(image: Path, workdir: Path) -> str:
+    """OCR a photo slide. Formats the OCR library can't open (e.g. HEIC)
+    are converted to PNG with ffmpeg first."""
+    try:
+        return ocr_lines([image])
+    except Exception:
+        png = workdir / (image.stem + ".png")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(image), str(png)],
+                       check=True)
+        return ocr_lines([png])
 
 
 def process_videos(videos: list[Path], source: str = "", caption: str = "") -> tuple[Path, dict]:
-    """Full pipeline for one reel or a multi-video post → ONE note."""
-    transcripts, screens, languages = [], [], []
+    """Full pipeline for one reel or a multi-slide post (videos and/or photos) → ONE note."""
+    labels, transcripts, screens, languages = [], [], [], []
+    photo_count = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for i, video in enumerate(videos[:MAX_VIDEOS], start=1):
-            workdir = Path(tmp) / f"v{i}"
+        for i, slide in enumerate(videos[:MAX_VIDEOS], start=1):
+            workdir = Path(tmp) / f"s{i}"
             workdir.mkdir()
+            is_photo = slide.suffix.lower() in IMAGE_EXTS
             try:
-                text, lang = transcribe(video)
-                screen = screen_text(video, workdir)
-            except Exception as exc:   # one broken video shouldn't stop the whole post
-                print(f"Skipping video {i} ({video.name}): {exc!r}")
+                if is_photo:
+                    text, lang = "", "en"
+                    screen = image_text(slide, workdir)
+                else:
+                    text, lang = transcribe(slide)
+                    screen = screen_text(slide, workdir)
+            except Exception as exc:   # one broken slide shouldn't stop the whole post
+                print(f"Skipping slide {i} ({slide.name}): {exc!r}")
                 continue
+            photo_count += is_photo
+            labels.append(f"Slide {len(labels) + 1}" + (" · photo" if is_photo else ""))
             transcripts.append(text)
             screens.append(screen)
             languages.append(lang)
     if not transcripts:
-        raise RuntimeError("None of the videos in this post could be processed.")
+        raise RuntimeError("None of the slides in this post could be processed.")
 
     if len(transcripts) == 1:
         transcript, screen = transcripts[0], screens[0]
-    else:  # label each part so the AI (and you) can tell the videos apart
-        per_video = max(1500, 9000 // len(screens))   # keep the prompt a sensible size
-        transcript = "\n\n".join(f"[Video {i}] {t or '(no speech)'}"
-                                 for i, t in enumerate(transcripts, 1))
-        screen = "\n\n".join(f"[Video {i}]\n{s[:per_video]}"
-                             for i, s in enumerate(screens, 1))
+    else:  # label each part so the AI (and you) can tell the slides apart
+        per_slide = max(1500, 9000 // len(screens))   # keep the prompt a sensible size
+        transcript = "\n\n".join(f"[{lab}] {t or '(no speech)'}"
+                                 for lab, t in zip(labels, transcripts))
+        screen = "\n\n".join(f"[{lab}]\n{s[:per_slide]}" for lab, s in zip(labels, screens))
     language = next((lang for lang in languages if lang != "en"), "en")
 
     data = summarise(transcript, screen, caption)
     data["language"] = language
-    data["video_count"] = len(transcripts)
+    data["video_count"] = len(transcripts) - photo_count
+    data["photo_count"] = photo_count
     return save_note(data, transcript, screen, source, language, caption), data
 
 
@@ -570,6 +637,18 @@ def find_note_by_source(url: str) -> Path | None:
             if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
                 return note
     return None
+
+
+def slide_total(data: dict) -> int:
+    return data.get("video_count", 1) + data.get("photo_count", 0)
+
+
+def slide_summary(data: dict) -> str:
+    """'5 (3 videos, 2 photos)' or '4 videos'."""
+    v, ph = data.get("video_count", 1), data.get("photo_count", 0)
+    if ph and v:
+        return f"{v + ph} ({v} video{'s' * (v != 1)}, {ph} photo{'s' * (ph != 1)})"
+    return f"{ph} photos" if ph else f"{v} videos"
 
 
 def motivation_lines(data: dict) -> list[str]:
@@ -631,6 +710,29 @@ def set_priority(numbers: list[int], level: str) -> list[str]:
 
 def tags_line(tags: list[str]) -> str:
     return "- Tags: " + " ".join(f"#{t}" for t in tags)
+
+
+def rename_tag(old: str, new: str) -> int:
+    """Rename a tag in every note (e.g. 'claudie' -> 'claude').
+    If a note already has the new tag, the two are merged. Returns notes changed."""
+    old_c, new_c = clean_tags([old]), clean_tags([new])
+    if not old_c or not new_c or not NOTES_DIR.exists():
+        return 0
+    old, new = old_c[0], new_c[0]
+    changed = 0
+    for path in NOTES_DIR.glob("*.md"):
+        tags = read_tags(path)
+        if old not in tags:
+            continue
+        merged = clean_tags([new if t == old else t for t in tags])  # also removes duplicates
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines[:12]):
+            if line.startswith("- Tags:"):
+                lines[i] = tags_line(merged)
+                break
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        changed += 1
+    return changed
 
 
 def read_tags(path: Path) -> list[str]:
@@ -764,6 +866,80 @@ def complete_actions(numbers: list[int], mark: str = "x") -> list[str]:
     for path, line_nos in by_file.items():
         lines = path.read_text(encoding="utf-8").splitlines()
         for i in line_nos:
-            lines[i] = lines[i].replace("- [ ] ", f"- [{mark}] ", 1)
+            # Record the date too (Obsidian Tasks style): ✅ = done, ❌ = skipped
+            stamp = f" {'✅' if mark == 'x' else '❌'} {datetime.now():%Y-%m-%d}"
+            lines[i] = lines[i].replace("- [ ] ", f"- [{mark}] ", 1) + stamp
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [a["action"] for a in chosen]
+
+
+# ---- weekly stats ---------------------------------------------------------
+
+DONE_DATE_RE = re.compile(r"^- \[(x|-)\] .*(✅|❌) (\d{4}-\d{2}-\d{2})\s*$")
+
+
+def weekly_stats(today: date | None = None, days: int = 7) -> dict:
+    """What happened in the last `days` days: reels saved, actions done/skipped,
+    categories, most-used tags, plus what's still open."""
+    today = today or date.today()
+    start = today - timedelta(days=days - 1)
+    stats = {"start": start, "end": today, "saved": 0, "done": 0, "skipped": 0,
+             "categories": {}, "tags": {}}
+    if NOTES_DIR.exists():
+        for path in NOTES_DIR.glob("*.md"):
+            try:
+                created = date.fromisoformat(path.name[:10])
+            except ValueError:
+                created = None
+            text = path.read_text(encoding="utf-8")
+            if created and start <= created <= today:
+                stats["saved"] += 1
+                m = re.search(r"^- Category: (\w+)", text, re.M)
+                cat = m.group(1) if m else "other"
+                stats["categories"][cat] = stats["categories"].get(cat, 0) + 1
+                for t in read_tags(path):
+                    stats["tags"][t] = stats["tags"].get(t, 0) + 1
+            for line in text.splitlines():
+                m = DONE_DATE_RE.match(line)
+                if m and start <= date.fromisoformat(m.group(3)) <= today:
+                    stats["done" if m.group(1) == "x" else "skipped"] += 1
+    actions = open_actions()
+    stats["open"] = len(actions)
+    stats["open_high"] = sum(a["priority"] == "high" for a in actions)
+    stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return stats
+
+
+# ---- daily nudge ----------------------------------------------------------
+
+def action_id(action: dict) -> str:
+    """Short, stable id for an action (fits in a Telegram button):
+    first 8 characters of the note's file-name hash + the line number."""
+    import hashlib
+    return hashlib.md5(action["path"].name.encode()).hexdigest()[:8] + ":" + str(action["line"])
+
+
+def find_action(aid: str) -> tuple[int, dict] | None:
+    """(position in /todo order starting at 1, action) for an id, or None if
+    it's already done/skipped/deleted."""
+    for n, a in enumerate(open_actions(), start=1):
+        if action_id(a) == aid:
+            return n, a
+    return None
+
+
+def pick_nudge(after: str | None = None, today: date | None = None) -> dict | None:
+    """Today's one action: from the highest priority level that has any,
+    rotating day by day so an ignored action doesn't block the rest.
+    With `after`, return the next action in the list instead ('Another one')."""
+    actions = open_actions()
+    if not actions:
+        return None
+    if after:
+        ids = [action_id(a) for a in actions]
+        i = ids.index(after) + 1 if after in ids else 0
+        return actions[i % len(actions)]
+    top = actions[0]["priority"]
+    bucket = [a for a in actions if a["priority"] == top]
+    day = (today or date.today()).toordinal()
+    return bucket[day % len(bucket)]
