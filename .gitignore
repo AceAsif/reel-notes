@@ -4,3 +4,4 @@ __pycache__/
 notes/
 cookies.txt
 bot.log
+.pytest_cache/
