@@ -1,6 +1,6 @@
 # Progress - /remind command
 Branch: feature/reminders
-Last updated: 2026-11-13 23:35 (Hobart)
+Last updated: 2026-11-13 23:40 (Hobart)
 
 ## Plan
 1. Understand "when" in everyday words + save reminders to reminders.json
@@ -12,11 +12,13 @@ Last updated: 2026-11-13 23:35 (Hobart)
 
 - Step 2: /remind N when, /reminders, /unremind N; reminder message with Done / Skip / Tomorrow buttons; reminders reload on start-up (missed ones are sent ~15 s after start); 🔔 shown in /todo; ticking an action removes its reminder
 
+- Step 3: README (remind commands, reading notes on a phone)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 3: README, .env.example, BotFather list
+- All steps done. User: merge the PR, git pull, restart the bot, try /remind, update BotFather
 
 ## Decisions
 - A reminder missed while the PC was off is sent shortly after the bot starts again, not lost.

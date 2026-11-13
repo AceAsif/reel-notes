@@ -42,6 +42,8 @@ Reel video ───────────────────────
 | `/todo` | Numbered list of open action items, grouped by reel |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
 | `/high 3`, `/low 3`, `/normal 3` | Change an action's priority. `/todo` lists 🔥 high first, then normal, then 🔽 low |
+| `/remind 3 friday` | Reminds you about `/todo` item 3. Understands `tomorrow 5pm`, `monday`, `in 2 hours`, `in 3 days`, `next week`, `20/11 9am`, `25 dec`. No time means 9:00 am. The reminder has ✅ Done / ⏭ Skip / ⏰ Tomorrow buttons, and a reminder missed while the PC was off is sent when the bot starts again |
+| `/reminders`, `/unremind 1` | List upcoming reminders, or cancel one. Actions with a reminder show 🔔 in `/todo` |
 | `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
 | `/ask your question` | Answers from **your saved notes only**, e.g. `/ask which tools help Claude remember things?`. Shows which notes it used, so you can check. If nothing matches, it says so instead of guessing |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
@@ -84,7 +86,9 @@ The bot also sends a **weekly review** of open action items every Sunday at 9:00
 
 ## Notes on your phone
 
-**Quick:** send `/file 1` to get a note as a `.md` file in Telegram (after `/notes`, `/search` or `/tag`, the number picks from that list). Open it on your phone, or save or share it.
+**Easiest:** use the bot itself. `/notes` then `/note 3` shows a note nicely in Telegram.
+
+**As a file:** send `/file 1` to get a note as a `.md` file in Telegram (after `/notes`, `/search` or `/tag`, the number picks from that list). Open it on your phone, or save or share it.
 
 **All notes, always in sync:** keep the `notes` folder inside a cloud folder that syncs to your phone.
 
@@ -95,7 +99,7 @@ The bot also sends a **weekly review** of open action items every Sunday at 9:00
    NOTES_DIR=C:\Users\<you>\OneDrive\ReelNotes
    ```
 4. Start the bot again. New notes are saved there, and `/todo`, `/search` and the rest keep working.
-5. On your phone, open the **OneDrive** or **Google Drive** app. Notes are plain text files, so any text viewer opens them. A Markdown app (e.g. Obsidian, Markor) shows the headings and checkboxes nicely.
+5. On your phone, open the **OneDrive** or **Google Drive** app. Phones often can't preview `.md` files: use **Open in / Open with** and a Markdown app (Android: **Markor**, free; iPhone: any "Markdown viewer" app) to see the headings and checkboxes.
 
 Edit notes on your phone carefully. Ticking a box (`- [ ]` → `- [x]`) is fine, but keep the `## Action items` heading, because the bot uses it to find your actions.
 
