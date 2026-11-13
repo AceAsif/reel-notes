@@ -12,7 +12,9 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before importing processor so it sees .env values
 
+import requests  # noqa: E402
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram.constants import ChatAction  # noqa: E402
 from telegram.error import NetworkError, TimedOut  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
@@ -77,6 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
+        "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
 
@@ -322,6 +325,46 @@ async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"{n}. {title}  ({path.name[:10]})")
     lines += ["", "Open one with /note 1"]
     await status.edit_text("\n".join(lines)[:4000])
+
+
+# ---- chat mode ----------------------------------------------------------------
+
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Any normal message (not a /command, not a link): talk about your notes."""
+    if not is_allowed(update):
+        return
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    history = context.chat_data.setdefault("chat_history", [])
+    try:
+        reply, sources = await asyncio.to_thread(processor.chat_reply, text, list(history))
+    except requests.exceptions.ConnectionError:
+        await update.message.reply_text(
+            "😴 I can't reach the AI on your PC. Is Ollama running? "
+            "(Look for the llama icon near the clock.)")
+        return
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Something went wrong: {exc}")
+        return
+    history += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
+    del history[:-processor.CHAT_HISTORY_TURNS * 2]          # keep only recent turns
+    if sources:
+        context.user_data["last_results"] = [str(p) for p in sources]
+        titles = []
+        for n, path in enumerate(sources, start=1):
+            title = path.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+            titles.append(f"{n}. {title}")
+        reply += "\n\n📚 From your notes (open with /note 1):\n" + "\n".join(titles)
+    await update.message.reply_text(reply[:4000])
+
+
+async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/newchat makes the bot forget the current conversation."""
+    if is_allowed(update):
+        context.chat_data["chat_history"] = []
+        await update.message.reply_text("🧹 Fresh start! What would you like to talk about?")
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -696,7 +739,8 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         traceback.print_exception(err)
 
 
-def main() -> None:
+def build_app() -> Application:
+    """Create the bot with all its commands and scheduled jobs (doesn't start it)."""
     app = Application.builder().token(TOKEN).build()
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
@@ -725,6 +769,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(reminder_button_pressed, pattern=r"^rem:"))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
+    # Everything else you type (not a /command) is a chat message about your notes.
+    # Added after the link handler, so links still become notes.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.add_handler(CommandHandler("newchat", newchat))
 
     if ALLOWED_USER_ID:
         # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)
@@ -750,6 +798,11 @@ def main() -> None:
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))
 
+    return app
+
+
+def main() -> None:
+    app = build_app()
     print("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
 

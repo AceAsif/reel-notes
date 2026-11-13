@@ -313,3 +313,57 @@ def test_reminder_store(notes, tmp_path, monkeypatch):
     rs = p.load_reminders()
     assert len(rs) == 1 and rs[0]["text"] == "a" and rs[0]["when"].startswith("2026-11-20")
     assert p.remove_reminder(p.action_id(a)) and p.load_reminders() == []
+
+
+# ---- chat mode ----------------------------------------------------------------
+
+class FakeResp:
+    def __init__(self, text): self.text = text
+    def raise_for_status(self): pass
+    def json(self): return {"message": {"content": self.text}}
+
+
+def capture_chat(monkeypatch, reply="Hi **Boss**"):
+    sent = {}
+    def fake_post(url, json, timeout):
+        sent["url"], sent["body"] = url, json
+        return FakeResp(reply)
+    monkeypatch.setattr(p.requests, "post", fake_post)
+    return sent
+
+
+def test_chat_uses_matching_notes(notes, monkeypatch):
+    note = make_note(title="Claude Memory Plugin", source="https://x/a")
+    make_note(title="Cooking Rice", source="https://x/b", tags=["food"])
+    sent = capture_chat(monkeypatch)
+    reply, sources = p.chat_reply("which plugin gives claude memory?", [])
+    system = sent["body"]["messages"][0]["content"]
+    assert sent["url"].endswith("/api/chat") and sources == [note]
+    assert "Claude Memory Plugin" in system and "Cooking Rice" not in system
+    assert reply == "Hi Boss"                       # Markdown ** removed
+
+
+def test_chat_follow_up_uses_previous_message(notes, monkeypatch):
+    note = make_note(title="Strix Security Scanner", source="https://x/a")
+    sent = capture_chat(monkeypatch)
+    history = [{"role": "user", "content": "tell me about strix"},
+               {"role": "assistant", "content": "Strix finds security holes."}]
+    reply, sources = p.chat_reply("how do I install it?", history)
+    assert sources == [note]                         # found via the previous message
+    assert sent["body"]["messages"][1:] == history + [
+        {"role": "user", "content": "how do I install it?"}]
+
+
+def test_chat_small_talk_without_notes(notes, monkeypatch):
+    make_note(title="Strix Security Scanner")
+    sent = capture_chat(monkeypatch, reply="Hello! How can I help?")
+    reply, sources = p.chat_reply("hi", [])
+    assert sources == [] and "(no matching notes)" in sent["body"]["messages"][0]["content"]
+
+
+def test_chat_history_is_limited(notes, monkeypatch):
+    sent = capture_chat(monkeypatch)
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"}
+               for i in range(40)]
+    p.chat_reply("hello", history)
+    assert len(sent["body"]["messages"]) == 1 + p.CHAT_HISTORY_TURNS * 2 + 1

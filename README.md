@@ -45,6 +45,8 @@ Reel video ───────────────────────
 | `/remind 3 friday` | Reminds you about `/todo` item 3. Understands `tomorrow 5pm`, `monday`, `in 2 hours`, `in 3 days`, `next week`, `20/11 9am`, `25 dec`. No time means 9:00 am. The reminder has ✅ Done / ⏭ Skip / ⏰ Tomorrow buttons, and a reminder missed while the PC was off is sent when the bot starts again |
 | `/reminders`, `/unremind 1` | List upcoming reminders, or cancel one. Actions with a reminder show 🔔 in `/todo` |
 | `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
+| *(type a normal message)* | **Chat mode**: talk to the bot about your notes, e.g. *"what did I save about Claude?"*, then follow-ups like *"how do I install it?"*. It uses only facts from your notes (with the notes listed under the reply) and remembers the last 6 back-and-forth messages. Runs on your local Ollama model, free and private |
+| `/newchat` | Forget the current conversation and start fresh |
 | `/ask your question` | Answers from **your saved notes only**, e.g. `/ask which tools help Claude remember things?`. Shows which notes it used, so you can check. If nothing matches, it says so instead of guessing |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
 | `/notes` | Lists your 10 newest notes |
