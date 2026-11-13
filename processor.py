@@ -990,14 +990,20 @@ def question_words(question: str) -> list[str]:
     return [w for w in words if len(w) >= 3 and w not in STOPWORDS]
 
 
-def answer_question(question: str, max_notes: int = 5) -> tuple[str, list[Path]]:
-    """Answer from your notes. Returns (answer, notes it was based on).
-    If no note matches, the AI isn't asked at all (so it can't make something up)."""
-    words = question_words(question)
+def relevant_notes(text: str, max_notes: int = 5) -> list[dict]:
+    """Notes matching the meaningful words in `text`; weak matches dropped."""
+    words = question_words(text)
     hits = search_notes(" ".join(words), limit=max_notes, match_all=False) if words else []
     if hits:  # keep only notes that match reasonably well compared to the best one
         best = hits[0]["score"]
         hits = [h for h in hits if h["score"] >= max(1, best * 0.25)]
+    return hits
+
+
+def answer_question(question: str, max_notes: int = 5) -> tuple[str, list[Path]]:
+    """Answer from your notes. Returns (answer, notes it was based on).
+    If no note matches, the AI isn't asked at all (so it can't make something up)."""
+    hits = relevant_notes(question, max_notes)
     if not hits:
         return NOT_FOUND, []
     blocks = [f"[Note {n}] {note_summary_text(h['path'])[:2500]}"
@@ -1148,3 +1154,53 @@ def remove_reminder(aid: str) -> bool:
     kept = [r for r in reminders if r["action_id"] != aid]
     save_reminders(kept)
     return len(kept) != len(reminders)
+
+
+# ---- chat mode: talk to the bot about your notes ----------------------------
+
+CHAT_SYSTEM = """You are Reel Notes, a friendly personal assistant inside Telegram.
+You help me use the notes I saved from short videos (tech, programming, motivation).
+How to talk:
+- Warm, encouraging and simple English (English is not my first language).
+- Short replies: usually 2-6 sentences, or a short list. No long essays.
+- For facts about tools, commands, links, quotes or tips, use ONLY the notes below.
+  Copy names, commands and links exactly. If the notes don't cover it, say
+  "I don't have that in your notes" and suggest saving a reel about it.
+  Never invent tools, links, numbers or quotes.
+- Small talk (hello, thanks, how are you) is fine: answer briefly and kindly.
+- When it helps, suggest a next step, e.g. "Want a reminder? /remind 2 friday".
+- Use plain text only, no Markdown symbols like ** or ##.
+
+MY NOTES FOR THIS MESSAGE:
+<<NOTES>>
+"""
+CHAT_HISTORY_TURNS = 6          # remembered back-and-forth messages
+
+
+def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[str, list[Path]]:
+    """Reply to a normal chat message using matching notes and recent history.
+
+    history = [{"role": "user"|"assistant", "content": "..."}] (oldest first).
+    Notes are found from this message AND the previous user message, so
+    follow-ups like "what about the second one?" still find the right notes.
+    Returns (reply text, notes that were given to the AI).
+    """
+    previous = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
+    hits = relevant_notes(message, max_notes) or relevant_notes(previous + " " + message,
+                                                                max_notes)
+    notes = "\n\n".join(f"[Note {n}: {h['title']}]\n{note_summary_text(h['path'])[:2000]}"
+                         for n, h in enumerate(hits, start=1)) or "(no matching notes)"
+    messages = [{"role": "system", "content": CHAT_SYSTEM.replace("<<NOTES>>", notes)}]
+    messages += history[-CHAT_HISTORY_TURNS * 2:]
+    messages.append({"role": "user", "content": message})
+    resp = requests.post(
+        f"{OLLAMA_URL}/api/chat",
+        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
+              "options": {"temperature": 0.4, "num_ctx": 8192}},
+        timeout=600,
+    )
+    resp.raise_for_status()
+    reply = (resp.json().get("message", {}).get("content") or "").strip()
+    reply = re.sub(r"\*\*|__|^#+\s*", "", reply, flags=re.M)   # strip Markdown leftovers
+    return reply or "Sorry, I couldn't think of an answer. Can you ask another way?", \
+        [h["path"] for h in hits]
