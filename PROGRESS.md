@@ -1,30 +1,30 @@
-# Progress - YouTube Shorts/TikTok links and /ask
-Branch: feature/shorts-and-ask
-Last updated: 2026-11-13 22:45 (Hobart)
+# Progress - /remind command
+Branch: feature/reminders
+Last updated: 2026-11-13 23:40 (Hobart)
 
 ## Plan
-1. Accept YouTube Shorts / YouTube / TikTok links; fix duplicate check for YouTube IDs; skip videos longer than MAX_MINUTES
-2. /ask question: answer from your saved notes with the local AI, showing which notes it used
-3. README, /start help, .env.example, BotFather list
+1. Understand "when" in everyday words + save reminders to reminders.json
+2. Bot: /remind N when, /reminders, /unremind N; send reminders on time with Done / Skip / Tomorrow buttons; reminders survive restarts; 🔔 shown in /todo
+3. README, help text, BotFather list
 
 ## Done
-- Step 1: LINK_PATTERN accepts youtube.com/shorts, youtube.com/watch, youtu.be, tiktok.com (incl. vm.tiktok.com); normalise_url keeps the YouTube video ID so watch?v=, shorts/ and youtu.be links match each other; MAX_MINUTES (default 10) skips long videos (15 new tests, new tests/test_bot.py)
+- Step 1: parse_when() understands weekdays, today/tonight/tomorrow, next week, in N minutes/hours/days/weeks, 20/11, 20/11/2027, 2026-12-25, 25 dec, plus times (5pm, 17:30, morning); add/remove/load reminders in reminders.json (22 new tests)
 
-- Step 2: /ask question - finds matching notes (any word, weak matches dropped), the AI answers ONLY from them or says it couldn't find it, and the reply lists the source notes for /note (5 new tests)
+- Step 2: /remind N when, /reminders, /unremind N; reminder message with Done / Skip / Tomorrow buttons; reminders reload on start-up (missed ones are sent ~15 s after start); 🔔 shown in /todo; ticking an action removes its reminder
 
-- Step 3: README (new sources, /ask, MAX_MINUTES), .env.example, /start help text
+- Step 3: README (remind commands, reading notes on a phone)
 
 ## In progress
 - (none)
 
 ## Next step
-- All steps done. User: open and squash-merge the PR, git pull, restart the bot, test a YouTube Short, a TikTok link and /ask, update BotFather
+- All steps done. User: merge the PR, git pull, restart the bot, try /remind, update BotFather
 
 ## Decisions
-- /ask never calls the AI when no note matches, so it can't invent an answer from nothing; the reply always shows its sources with a reminder that AI can be wrong.
-- Feature #3 ("you saved something similar") dropped at the user's request: a wrong match could make him miss a reel.
-- Google Drive: use Google Drive for desktop + NOTES_DIR (already in README), not the Drive API (needs a Google Cloud project and keys).
-- Normal YouTube videos are accepted too, but only up to MAX_MINUTES (default 10) so a 1-hour video doesn't block the bot.
+- A reminder missed while the PC was off is sent shortly after the bot starts again, not lost.
+- Dates are day-first (20/11 = 20 November), as used in Australia.
+- No time given = 9:00 am. "friday" said on a Friday after that time = next Friday.
+- reminders.json lives in the project folder and is git-ignored (personal data).
 
 ## Problems / questions for the user
-- Please test one YouTube Short and one TikTok link (the build environment can't reach them).
+- (none yet)

@@ -74,7 +74,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /nudge  /stats\n"
+        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
@@ -168,6 +168,7 @@ def actions_text() -> str:
     if not actions:
         return "🎉 No open action items."
     headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
+    reminded = {r["action_id"] for r in processor.load_reminders()}
     lines = [f"You have {len(actions)} open action items:"]
     current_priority, current_title = None, None
     for n, a in enumerate(actions, start=1):
@@ -177,9 +178,11 @@ def actions_text() -> str:
         if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
             lines += [f"📌 {current_title}"]
-        lines.append(f"{n}. ☐ {a['action']}")
+        bell = " 🔔" if processor.action_id(a) in reminded else ""
+        lines.append(f"{n}. ☐ {a['action']}{bell}")
     lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)",
-              "Not doing one? /skip 3   Change priority: /high 3  /low 3  /normal 3"]
+              "Not doing one? /skip 3   Change priority: /high 3  /low 3  /normal 3",
+              "Reminder: /remind 3 friday   (🔔 = reminder set, see /reminders)"]
     text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:3900] + "\n...\n\nList too long, tick some off with /done first."
@@ -514,10 +517,140 @@ async def nudge_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     number, action = found
     processor.complete_actions([number], "x" if what == "done" else "-")
+    processor.remove_reminder(aid)          # no reminder needed for a finished action
     left = len(processor.open_actions())
     verb = "✅ Done" if what == "done" else "⏭ Skipped"
     await query.edit_message_text(f"{verb}: {action['action']}\n\n{left} open items left. "
                                   "Want another? /nudge")
+
+
+# ---- reminders --------------------------------------------------------------
+
+REMIND_EXAMPLES = ("Examples:\n/remind 3 friday\n/remind 3 tomorrow 5pm\n"
+                   "/remind 3 in 2 hours\n/remind 3 20/11 9am\n(no time = 9:00 am)")
+
+
+def when_text(when: datetime.datetime) -> str:
+    """'Fri 20 Nov, 9:00 am'"""
+    ampm = "am" if when.hour < 12 else "pm"
+    return f"{when:%a} {when.day} {when:%b}, {when.hour % 12 or 12}:{when:%M} {ampm}"
+
+
+def schedule_reminder(job_queue, reminder: dict, chat_id: int) -> None:
+    when = datetime.datetime.fromisoformat(reminder["when"])
+    now = datetime.datetime.now(TIMEZONE)
+    # Missed while the PC was off? Send it shortly after start-up instead.
+    run_at = when if when > now else now + datetime.timedelta(seconds=15)
+    job_queue.run_once(send_reminder, when=run_at, chat_id=chat_id,
+                       data=reminder["action_id"], name=f"remind:{reminder['action_id']}")
+
+
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    aid = context.job.data
+    reminder = next((r for r in processor.load_reminders() if r["action_id"] == aid), None)
+    if reminder is None:
+        return                                  # cancelled with /unremind
+    processor.remove_reminder(aid)
+    found = processor.find_action(aid)
+    if found is None:
+        return                                  # already done or skipped
+    _, action = found
+    icon = processor.PRIORITY_ICON[action["priority"]]
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
+        InlineKeyboardButton("⏭ Skip", callback_data=f"nudge:skip:{aid}"),
+        InlineKeyboardButton("⏰ Tomorrow", callback_data=f"rem:tomorrow:{aid}"),
+    ]])
+    await context.bot.send_message(
+        context.job.chat_id,
+        f"⏰ Reminder!\n\n{icon}{action['action']}\n\n📌 From: {action['title']}",
+        reply_markup=buttons)
+
+
+async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/remind 3 friday  → reminds you about /todo item 3 on Friday at 9:00 am."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if len(args) < 2 or not args[0].isdigit():
+        await update.message.reply_text("Usage: /remind <number from /todo> <when>\n\n"
+                                        + REMIND_EXAMPLES)
+        return
+    actions = processor.open_actions()
+    n = int(args[0])
+    if not 1 <= n <= len(actions):
+        await update.message.reply_text("No action with that number. Send /todo to see the list.")
+        return
+    now = datetime.datetime.now(TIMEZONE)
+    when = processor.parse_when(" ".join(args[1:]), now)
+    if when is None:
+        await update.message.reply_text("I didn't understand the time 🤔\n\n" + REMIND_EXAMPLES)
+        return
+    if when <= now:
+        await update.message.reply_text("That time has already passed. Pick a future time.")
+        return
+    reminder = processor.add_reminder(actions[n - 1], when)
+    for job in context.job_queue.get_jobs_by_name(f"remind:{reminder['action_id']}"):
+        job.schedule_removal()                  # replace an older reminder for this action
+    schedule_reminder(context.job_queue, reminder, update.effective_chat.id)
+    await update.message.reply_text(
+        f"🔔 I'll remind you on {when_text(when)}:\n{actions[n - 1]['action']}")
+
+
+def reminders_list() -> list[dict]:
+    """Saved reminders whose action is still open, soonest first."""
+    return [r for r in processor.load_reminders() if processor.find_action(r["action_id"])]
+
+
+async def reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/reminders lists upcoming reminders."""
+    if not is_allowed(update):
+        return
+    items = reminders_list()
+    if not items:
+        await update.message.reply_text("🔔 No reminders set. Add one: /remind 3 friday")
+        return
+    lines = ["🔔 Upcoming reminders:", ""]
+    for n, r in enumerate(items, start=1):
+        when = datetime.datetime.fromisoformat(r["when"])
+        lines.append(f"{n}. {when_text(when)} — {r['text']}")
+    lines += ["", "Cancel one with /unremind 1"]
+    await update.message.reply_text("\n".join(lines)[:4000])
+
+
+async def unremind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unremind 1 cancels reminder 1 from /reminders."""
+    if not is_allowed(update):
+        return
+    items = reminders_list()
+    nums = re.findall(r"\d+", " ".join(context.args or []))
+    if not nums or not 1 <= int(nums[0]) <= len(items):
+        await update.message.reply_text("Usage: /unremind 1  (numbers come from /reminders)")
+        return
+    r = items[int(nums[0]) - 1]
+    processor.remove_reminder(r["action_id"])
+    for job in context.job_queue.get_jobs_by_name(f"remind:{r['action_id']}"):
+        job.schedule_removal()
+    await update.message.reply_text(f"🔕 Reminder cancelled: {r['text']}")
+
+
+async def reminder_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⏰ Tomorrow button: remind again tomorrow at 9:00 am."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    aid = query.data.split(":", 2)[2]
+    found = processor.find_action(aid)
+    if found is None:
+        await query.edit_message_text("This action is already done or skipped.")
+        return
+    _, action = found
+    when = processor.parse_when("tomorrow", datetime.datetime.now(TIMEZONE))
+    reminder = processor.add_reminder(action, when)
+    schedule_reminder(context.job_queue, reminder, query.message.chat_id)
+    await query.edit_message_text(f"⏰ OK, I'll remind you again on {when_text(when)}:\n"
+                                  f"{action['action']}")
 
 
 def stats_text() -> str:
@@ -586,6 +719,10 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("file", send_file))
     app.add_handler(CommandHandler("ask", ask))
+    app.add_handler(CommandHandler("remind", remind))
+    app.add_handler(CommandHandler("reminders", reminders))
+    app.add_handler(CommandHandler("unremind", unremind))
+    app.add_handler(CallbackQueryHandler(reminder_button_pressed, pattern=r"^rem:"))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 
@@ -608,6 +745,10 @@ def main() -> None:
                 )
             except ValueError:
                 print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
+
+        # Reminders saved before a restart (or missed while the PC was off)
+        for r in processor.load_reminders():
+            schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))
 
     print("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
