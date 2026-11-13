@@ -293,6 +293,34 @@ async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
 
 
+async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ask which tools help Claude remember things?  → answer from your notes."""
+    if not is_allowed(update):
+        return
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await update.message.reply_text(
+            "Usage: /ask your question\n"
+            "e.g. /ask which tools help Claude remember things?")
+        return
+    status = await update.message.reply_text("🤔 Looking through your notes...")
+    try:
+        answer, sources = await asyncio.to_thread(processor.answer_question, question)
+    except Exception as exc:
+        await status.edit_text(f"❌ Something went wrong: {exc}")
+        return
+    if not sources:
+        await status.edit_text(f"🔍 {answer}\nTry /search with a single word, e.g. /search strix")
+        return
+    context.user_data["last_results"] = [str(p) for p in sources]
+    lines = [f"💡 {answer}", "", "📚 Based on these notes (check them, AI can be wrong):"]
+    for n, path in enumerate(sources, start=1):
+        title = path.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+        lines.append(f"{n}. {title}  ({path.name[:10]})")
+    lines += ["", "Open one with /note 1"]
+    await status.edit_text("\n".join(lines)[:4000])
+
+
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/file 2 sends note 2 (from your last /search, /notes or /tag) as a .md file,
     so you can open, save or share it on your phone."""
@@ -557,6 +585,7 @@ def main() -> None:
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("file", send_file))
+    app.add_handler(CommandHandler("ask", ask))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 

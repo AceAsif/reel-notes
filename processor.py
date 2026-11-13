@@ -819,8 +819,9 @@ SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
                   "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 
-def search_notes(query: str, limit: int = 15) -> list[dict]:
-    """Find notes containing ALL words in the query (case-insensitive).
+def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[dict]:
+    """Find notes containing ALL words in the query (case-insensitive),
+    or ANY of them with match_all=False (used by /ask).
 
     Matches in the title/key points rank higher than matches in the transcript.
     Returns newest first among equal scores.
@@ -831,7 +832,8 @@ def search_notes(query: str, limit: int = 15) -> list[dict]:
     results = []
     for note in NOTES_DIR.glob("*.md"):
         lines = note.read_text(encoding="utf-8").splitlines()
-        if not words or not all(w in "\n".join(lines).lower() for w in words):
+        check = all if match_all else any
+        if not words or not check(w in "\n".join(lines).lower() for w in words):
             continue
         title = lines[0].lstrip("# ").strip() if lines else note.stem
         score, snippet, section = 0, "", "title"
@@ -956,3 +958,57 @@ def pick_nudge(after: str | None = None, today: date | None = None) -> dict | No
     bucket = [a for a in actions if a["priority"] == top]
     day = (today or date.today()).toordinal()
     return bucket[day % len(bucket)]
+
+
+# ---- /ask: answer questions from your notes --------------------------------
+
+STOPWORDS = set("""a an and are as at be but by can could do does for from had has have how
+i if in into is it its me my of on or should so than that the their them then there these
+they this to was we were what when where which who why will with would you your about any
+all also just like get got some tell show give find need want use using used best good
+which""".split())
+
+ASK_PROMPT = """Answer my question using ONLY the notes below. They are my own notes
+from short videos I saved. Rules:
+- Use only facts written in these notes. Do not add outside knowledge.
+- If the notes don't answer the question, the answer must be exactly:
+  "I couldn't find that in your notes."
+- Keep it short (under 150 words) and in plain, simple English.
+- Copy tool names, commands and links exactly as they are written in the notes.
+Return ONLY a JSON object: {"answer": "...", "sources": [numbers of the notes you used]}
+
+QUESTION: <<QUESTION>>
+
+NOTES:
+<<NOTES>>
+"""
+NOT_FOUND = "I couldn't find that in your notes."
+
+
+def question_words(question: str) -> list[str]:
+    words = re.findall(r"[a-z0-9][a-z0-9+#-]*", question.lower())
+    return [w for w in words if len(w) >= 3 and w not in STOPWORDS]
+
+
+def answer_question(question: str, max_notes: int = 5) -> tuple[str, list[Path]]:
+    """Answer from your notes. Returns (answer, notes it was based on).
+    If no note matches, the AI isn't asked at all (so it can't make something up)."""
+    words = question_words(question)
+    hits = search_notes(" ".join(words), limit=max_notes, match_all=False) if words else []
+    if hits:  # keep only notes that match reasonably well compared to the best one
+        best = hits[0]["score"]
+        hits = [h for h in hits if h["score"] >= max(1, best * 0.25)]
+    if not hits:
+        return NOT_FOUND, []
+    blocks = [f"[Note {n}] {note_summary_text(h['path'])[:2500]}"
+              for n, h in enumerate(hits, start=1)]
+    prompt = (ASK_PROMPT.replace("<<QUESTION>>", question.strip())
+                        .replace("<<NOTES>>", "\n\n".join(blocks)))
+    reply = ask_ollama_json(prompt)
+    answer = str(reply.get("answer", "")).strip() or NOT_FOUND
+    if answer == NOT_FOUND:
+        return NOT_FOUND, []
+    numbers = [n for n in reply.get("sources", []) if isinstance(n, int) and 1 <= n <= len(hits)]
+    # If the AI didn't say which notes it used, show all the notes it was given
+    used = [hits[n - 1]["path"] for n in dict.fromkeys(numbers)] or [h["path"] for h in hits]
+    return answer, used
