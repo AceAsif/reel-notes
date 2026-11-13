@@ -112,7 +112,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await status.edit_text(format_reply(data, note_path))
 
 
-LINK_PATTERN = r"https?://\S*(instagram\.com|facebook\.com|fb\.watch)\S*"
+LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
+                r"youtube\.com/(shorts|watch)|youtu\.be|tiktok\.com)\S*")
 
 
 async def already_saved(msg, url: str) -> bool:

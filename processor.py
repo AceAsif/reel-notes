@@ -477,6 +477,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
 
 
 MAX_VIDEOS = 10                       # most slides taken from one carousel post
+MAX_MINUTES = int(os.getenv("MAX_MINUTES", "10"))  # longest video accepted (YouTube etc.)
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
 
@@ -510,6 +511,9 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,             # no [download] lines filling bot.log
+        # Long YouTube videos would take ages: only take videos up to MAX_MINUTES
+        "match_filter": yt_dlp.utils.match_filter_func(
+            f"duration <=? {MAX_MINUTES * 60}"),
     }
     # Instagram often needs you logged in: export cookies to a cookies.txt file
     if os.getenv("COOKIES_FILE"):
@@ -543,7 +547,8 @@ def pick_slides(workdir: Path) -> list[Path]:
             by_slide[slide_position(p)] = p
     slides = [by_slide[k] for k in sorted(by_slide)]
     if not slides:
-        raise RuntimeError("Nothing could be downloaded from this post.")
+        raise RuntimeError("Nothing could be downloaded from this post. "
+                           f"(Videos longer than {MAX_MINUTES} minutes are skipped: see MAX_MINUTES in .env)")
     return slides
 
 
@@ -622,8 +627,16 @@ def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
     return process_videos([video], source)
 
 
+YOUTUBE_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:shorts/|watch\?(?:.*&)?v=|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
+
+
 def normalise_url(url: str) -> str:
-    """Same reel = same URL, ignoring ?igsh=... tracking bits and trailing slash."""
+    """Same reel = same URL, ignoring ?igsh=... tracking bits and trailing slash.
+    YouTube keeps its video ID (watch?v=ID, shorts/ID and youtu.be/ID all match)."""
+    m = YOUTUBE_ID_RE.search(url)
+    if m:
+        return "youtube:" + m.group(1)           # IDs are case-sensitive: don't lower()
     return url.split("?")[0].split("#")[0].rstrip("/").lower()
 
 

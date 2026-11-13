@@ -207,3 +207,21 @@ def test_mixed_post_note(notes, monkeypatch, tmp_path):
 def test_slide_summary():
     assert p.slide_summary({"video_count": 4, "photo_count": 0}) == "4 videos"
     assert p.slide_summary({"video_count": 0, "photo_count": 3}) == "3 photos"
+
+
+@pytest.mark.parametrize("a,b,same", [
+    ("https://www.youtube.com/shorts/abcDEF12345", "https://youtu.be/abcDEF12345?si=x", True),
+    ("https://www.youtube.com/watch?v=abcDEF12345&t=3", "https://m.youtube.com/shorts/abcDEF12345", True),
+    ("https://www.youtube.com/watch?v=abcDEF12345", "https://www.youtube.com/watch?v=zzzzzzzzzzz", False),
+    ("https://www.instagram.com/reel/ABC/?igsh=1", "https://www.instagram.com/reel/abc", True),
+])
+def test_normalise_url(a, b, same):
+    assert (p.normalise_url(a) == p.normalise_url(b)) is same
+
+
+def test_long_videos_filtered():
+    import yt_dlp
+    f = yt_dlp.utils.match_filter_func(f"duration <=? {p.MAX_MINUTES * 60}")
+    assert f({"duration": 45}) is None                   # short: accepted
+    assert f({"duration": 3600}) is not None             # 1 hour: rejected
+    assert f({}) is None                                 # unknown length: accepted
