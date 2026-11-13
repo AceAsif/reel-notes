@@ -1,6 +1,6 @@
 # Progress - YouTube Shorts/TikTok links and /ask
 Branch: feature/shorts-and-ask
-Last updated: 2026-11-13 22:35 (Hobart)
+Last updated: 2026-11-13 22:45 (Hobart)
 
 ## Plan
 1. Accept YouTube Shorts / YouTube / TikTok links; fix duplicate check for YouTube IDs; skip videos longer than MAX_MINUTES
@@ -12,11 +12,13 @@ Last updated: 2026-11-13 22:35 (Hobart)
 
 - Step 2: /ask question - finds matching notes (any word, weak matches dropped), the AI answers ONLY from them or says it couldn't find it, and the reply lists the source notes for /note (5 new tests)
 
+- Step 3: README (new sources, /ask, MAX_MINUTES), .env.example, /start help text
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 3: README, /start help, .env.example (MAX_MINUTES), BotFather list
+- All steps done. User: open and squash-merge the PR, git pull, restart the bot, test a YouTube Short, a TikTok link and /ask, update BotFather
 
 ## Decisions
 - /ask never calls the AI when no note matches, so it can't invent an answer from nothing; the reply always shows its sources with a reminder that AI can be wrong.
