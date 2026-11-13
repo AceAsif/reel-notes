@@ -73,9 +73,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
-        "Send me a reel link, a carousel post link or a video and I'll turn it into a note.\n\n"
+        "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /nudge  /stats\n"
-        "Notes: /notes  /note 1  /file 1  /search strix\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
@@ -112,7 +112,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await status.edit_text(format_reply(data, note_path))
 
 
-LINK_PATTERN = r"https?://\S*(instagram\.com|facebook\.com|fb\.watch)\S*"
+LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
+                r"youtube\.com/(shorts|watch)|youtu\.be|tiktok\.com)\S*")
 
 
 async def already_saved(msg, url: str) -> bool:
@@ -290,6 +291,34 @@ async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No note with that number. Run /search or /notes again.")
         return
     await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
+
+
+async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ask which tools help Claude remember things?  → answer from your notes."""
+    if not is_allowed(update):
+        return
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await update.message.reply_text(
+            "Usage: /ask your question\n"
+            "e.g. /ask which tools help Claude remember things?")
+        return
+    status = await update.message.reply_text("🤔 Looking through your notes...")
+    try:
+        answer, sources = await asyncio.to_thread(processor.answer_question, question)
+    except Exception as exc:
+        await status.edit_text(f"❌ Something went wrong: {exc}")
+        return
+    if not sources:
+        await status.edit_text(f"🔍 {answer}\nTry /search with a single word, e.g. /search strix")
+        return
+    context.user_data["last_results"] = [str(p) for p in sources]
+    lines = [f"💡 {answer}", "", "📚 Based on these notes (check them, AI can be wrong):"]
+    for n, path in enumerate(sources, start=1):
+        title = path.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+        lines.append(f"{n}. {title}  ({path.name[:10]})")
+    lines += ["", "Open one with /note 1"]
+    await status.edit_text("\n".join(lines)[:4000])
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -556,6 +585,7 @@ def main() -> None:
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("file", send_file))
+    app.add_handler(CommandHandler("ask", ask))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
 

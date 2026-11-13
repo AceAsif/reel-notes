@@ -1,6 +1,6 @@
 # Reel Notes 📝
 
-A personal Telegram bot that turns Instagram and Facebook reels (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
+A personal Telegram bot that turns Instagram, Facebook, YouTube Shorts and TikTok videos (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
 
 Send the bot a **reel link** or a **reel video**, and about a minute later you get back:
 
@@ -35,7 +35,7 @@ Reel video ───────────────────────
 
 | Command | What it does |
 |---|---|
-| *(send a reel link)* | Downloads the reel and makes a note |
+| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes) and TikTok |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
@@ -43,6 +43,7 @@ Reel video ───────────────────────
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
 | `/high 3`, `/low 3`, `/normal 3` | Change an action's priority. `/todo` lists 🔥 high first, then normal, then 🔽 low |
 | `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
+| `/ask your question` | Answers from **your saved notes only**, e.g. `/ask which tools help Claude remember things?`. Shows which notes it used, so you can check. If nothing matches, it says so instead of guessing |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
 | `/notes` | Lists your 10 newest notes |
 | `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
@@ -168,6 +169,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `NOTES_DIR` | `notes` | Where notes are saved |
 | `TIMEZONE` | `Australia/Hobart` | For the weekly reminder |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
+| `MAX_MINUTES` | `10` | Longest video accepted (for YouTube links) |
 | `NUDGE_TIME` | `08:00` | Time for the daily nudge (24-hour), or `off` |
 | `COOKIES_FILE` | — | Only if Instagram/Facebook downloads need a login |
 | `GITHUB_TOKEN` | — | Optional. Higher GitHub API limits for repo lookups |

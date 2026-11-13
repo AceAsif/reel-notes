@@ -207,3 +207,62 @@ def test_mixed_post_note(notes, monkeypatch, tmp_path):
 def test_slide_summary():
     assert p.slide_summary({"video_count": 4, "photo_count": 0}) == "4 videos"
     assert p.slide_summary({"video_count": 0, "photo_count": 3}) == "3 photos"
+
+
+@pytest.mark.parametrize("a,b,same", [
+    ("https://www.youtube.com/shorts/abcDEF12345", "https://youtu.be/abcDEF12345?si=x", True),
+    ("https://www.youtube.com/watch?v=abcDEF12345&t=3", "https://m.youtube.com/shorts/abcDEF12345", True),
+    ("https://www.youtube.com/watch?v=abcDEF12345", "https://www.youtube.com/watch?v=zzzzzzzzzzz", False),
+    ("https://www.instagram.com/reel/ABC/?igsh=1", "https://www.instagram.com/reel/abc", True),
+])
+def test_normalise_url(a, b, same):
+    assert (p.normalise_url(a) == p.normalise_url(b)) is same
+
+
+def test_long_videos_filtered():
+    import yt_dlp
+    f = yt_dlp.utils.match_filter_func(f"duration <=? {p.MAX_MINUTES * 60}")
+    assert f({"duration": 45}) is None                   # short: accepted
+    assert f({"duration": 3600}) is not None             # 1 hour: rejected
+    assert f({}) is None                                 # unknown length: accepted
+
+
+def test_question_words_drop_filler():
+    assert p.question_words("Which tools help Claude remember things?") == \
+        ["tools", "help", "claude", "remember", "things"]
+
+
+def test_ask_no_matching_notes_skips_ai(notes, monkeypatch):
+    make_note(title="Strix Security")
+    monkeypatch.setattr(p, "ask_ollama_json", lambda pr: pytest.fail("AI should not be asked"))
+    assert p.answer_question("how do I bake bread?") == (p.NOT_FOUND, [])
+
+
+def test_ask_uses_matching_notes_and_sources(notes, monkeypatch):
+    a = make_note(title="Claude Memory Plugin", source="https://x/a")
+    make_note(title="Strix Security", source="https://x/b")
+    seen = {}
+    def fake_ai(prompt):
+        seen["prompt"] = prompt
+        return {"answer": "Use Claude mem.", "sources": [1, 99]}   # 99 is invalid
+    monkeypatch.setattr(p, "ask_ollama_json", fake_ai)
+    answer, sources = p.answer_question("Which plugin gives Claude memory?")
+    assert answer == "Use Claude mem." and sources == [a]
+    assert "Claude Memory Plugin" in seen["prompt"] and "## Transcript" not in seen["prompt"]
+
+
+def test_ask_ai_says_not_found(notes, monkeypatch):
+    make_note(title="Claude Memory Plugin")
+    monkeypatch.setattr(p, "ask_ollama_json", lambda pr: {"answer": p.NOT_FOUND, "sources": []})
+    assert p.answer_question("claude pricing?") == (p.NOT_FOUND, [])
+
+
+def test_ask_drops_weak_matches(notes, monkeypatch):
+    strong = make_note(title="Claude Memory Plugin Claude Memory", source="https://x/a")
+    make_note(title="Cooking", source="https://x/b", tags=["food"],
+              key_points=["memory of grandma's food"])
+    seen = {}
+    monkeypatch.setattr(p, "ask_ollama_json",
+                        lambda pr: seen.setdefault("p", pr) and {"answer": "x", "sources": []})
+    p.answer_question("claude memory plugin")
+    assert "Claude Memory Plugin" in seen["p"] and "Cooking" not in seen["p"]
