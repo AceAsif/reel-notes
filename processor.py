@@ -1012,3 +1012,139 @@ def answer_question(question: str, max_notes: int = 5) -> tuple[str, list[Path]]
     # If the AI didn't say which notes it used, show all the notes it was given
     used = [hits[n - 1]["path"] for n in dict.fromkeys(numbers)] or [h["path"] for h in hits]
     return answer, used
+
+
+# ---- reminders ------------------------------------------------------------
+
+REMINDERS_FILE = Path(os.getenv("REMINDERS_FILE", "reminders.json"))
+DEFAULT_REMIND_HOUR = 9
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
+
+def _parse_time(text: str) -> tuple[int, int] | None:
+    """'5pm', '5:30 pm', '17:00', 'at 9am' -> (hour, minute)."""
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text)
+    if m:
+        hour, minute = int(m.group(1)) % 12, int(m.group(2) or 0)
+        return (hour + 12 if m.group(3) == "pm" else hour), minute
+    m = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    if "tonight" in text or "evening" in text:
+        return 19, 0
+    if "afternoon" in text:
+        return 14, 0
+    if "morning" in text:
+        return 9, 0
+    return None
+
+
+def parse_when(text: str, now: datetime) -> datetime | None:
+    """Turn everyday words into a date and time (in now's timezone).
+
+    Understands: today, tonight, tomorrow, weekday names (friday, fri),
+    next week, in 3 days / 2 hours / 1 week, 2026-11-20, 20/11, 20/11/2026,
+    20 nov, nov 20 — plus an optional time (5pm, 17:30, morning).
+    No time given = 9:00 am. Returns None if it can't understand it.
+    """
+    t = text.lower().strip()
+    tm = _parse_time(t)
+    hour, minute = tm or (DEFAULT_REMIND_HOUR, 0)
+
+    def at(day) -> datetime:
+        return now.replace(year=day.year, month=day.month, day=day.day,
+                           hour=hour, minute=minute, second=0, microsecond=0)
+
+    m = re.search(r"\bin\s+(\d+)\s*(minute|min|hour|hr|day|week)s?\b", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if unit in ("minute", "min"):
+            return now + timedelta(minutes=n)
+        if unit in ("hour", "hr"):
+            return now + timedelta(hours=n)
+        days = n * (7 if unit == "week" else 1)
+        return at(now.date() + timedelta(days=days))
+
+    day = None
+    if re.search(r"\b(today|tonight)\b", t):
+        day = now.date()
+    elif "tomorrow" in t:
+        day = now.date() + timedelta(days=1)
+    elif "next week" in t:                       # next Monday
+        day = now.date() + timedelta(days=7 - now.weekday())
+    else:
+        for i, name in enumerate(WEEKDAYS):
+            if re.search(rf"\b({name}|{name[:3]})\b", t):
+                ahead = (i - now.weekday()) % 7
+                if ahead == 0 and at(now.date()) <= now:
+                    ahead = 7                     # 'friday' on a Friday afternoon = next week
+                day = now.date() + timedelta(days=ahead)
+                break
+    if day is None:
+        m = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", t)
+        if m:
+            day = _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        else:
+            m = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", t)   # 20/11 (day first)
+            if m:
+                year = int(m.group(3)) if m.group(3) else now.year
+                year += 2000 if year < 100 else 0
+                day = _safe_date(year, int(m.group(2)), int(m.group(1)), now, m.group(3))
+            else:
+                mon = "|".join(MONTHS)
+                m = (re.search(rf"\b(\d{{1,2}})\s*({mon})[a-z]*\b", t)
+                     or re.search(rf"\b({mon})[a-z]*\s*(\d{{1,2}})\b", t))
+                if m:
+                    a, b = m.groups()
+                    d, mname = (a, b) if a.isdigit() else (b, a)
+                    day = _safe_date(now.year, MONTHS.index(mname[:3]) + 1, int(d), now, None)
+    if day is None:
+        if tm is None:
+            return None
+        day = now.date()                          # just a time: today, or tomorrow if passed
+        if at(day) <= now:
+            day += timedelta(days=1)
+    return at(day)
+
+
+def _safe_date(year, month, day, now=None, year_given="yes"):
+    """A real calendar date or None. Without a year, a date already past
+    this year means next year (e.g. '5/1' in November = 5 January next year)."""
+    try:
+        d = date(year, month, day)
+    except ValueError:
+        return None
+    if now is not None and not year_given and d < now.date():
+        d = date(year + 1, month, day)
+    return d
+
+
+def load_reminders() -> list[dict]:
+    try:
+        return json.loads(REMINDERS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def save_reminders(reminders: list[dict]) -> None:
+    REMINDERS_FILE.write_text(json.dumps(reminders, indent=2, ensure_ascii=False),
+                              encoding="utf-8")
+
+
+def add_reminder(action: dict, when: datetime) -> dict:
+    """Remember to remind about an action. Stored by action_id, so it still
+    points to the right action after /todo numbers change."""
+    reminders = [r for r in load_reminders() if r["action_id"] != action_id(action)]
+    reminder = {"action_id": action_id(action), "text": action["action"],
+                "when": when.isoformat()}
+    reminders.append(reminder)
+    save_reminders(sorted(reminders, key=lambda r: r["when"]))
+    return reminder
+
+
+def remove_reminder(aid: str) -> bool:
+    reminders = load_reminders()
+    kept = [r for r in reminders if r["action_id"] != aid]
+    save_reminders(kept)
+    return len(kept) != len(reminders)

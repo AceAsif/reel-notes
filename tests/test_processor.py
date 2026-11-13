@@ -266,3 +266,50 @@ def test_ask_drops_weak_matches(notes, monkeypatch):
                         lambda pr: seen.setdefault("p", pr) and {"answer": "x", "sources": []})
     p.answer_question("claude memory plugin")
     assert "Claude Memory Plugin" in seen["p"] and "Cooking" not in seen["p"]
+
+
+# ---- reminders ----------------------------------------------------------------
+from datetime import datetime as _dt  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+NOW = _dt(2026, 11, 13, 22, 30, tzinfo=ZoneInfo("Australia/Hobart"))   # Friday night
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("friday", "2026-11-20 09:00"),          # it's Friday 10:30pm: next Friday
+    ("fri 11pm", "2026-11-13 23:00"),        # later today
+    ("monday", "2026-11-16 09:00"),
+    ("mon 5:30pm", "2026-11-16 17:30"),
+    ("tomorrow", "2026-11-14 09:00"),
+    ("tomorrow evening", "2026-11-14 19:00"),
+    ("tonight", "2026-11-13 19:00"),
+    ("next week", "2026-11-16 09:00"),
+    ("in 3 days", "2026-11-16 09:00"),
+    ("in 2 hours", "2026-11-14 00:30"),
+    ("in 1 week", "2026-11-20 09:00"),
+    ("20/11", "2026-11-20 09:00"),
+    ("5/1", "2027-01-05 09:00"),             # already past this year: next year
+    ("20/11/2027 8am", "2027-11-20 08:00"),
+    ("2026-12-25", "2026-12-25 09:00"),
+    ("25 dec", "2026-12-25 09:00"),
+    ("dec 25 at 6pm", "2026-12-25 18:00"),
+    ("7am", "2026-11-14 07:00"),             # time only, already passed today
+])
+def test_parse_when(text, expected):
+    assert p.parse_when(text, NOW).strftime("%Y-%m-%d %H:%M") == expected
+
+
+@pytest.mark.parametrize("text", ["someday", "31/02", "blah blah"])
+def test_parse_when_unknown(text):
+    assert p.parse_when(text, NOW) is None
+
+
+def test_reminder_store(notes, tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "REMINDERS_FILE", tmp_path / "reminders.json")
+    make_note(actions=["a", "b"])
+    a = p.open_actions()[0]
+    p.add_reminder(a, NOW)
+    p.add_reminder(a, NOW.replace(day=20))          # same action: replaced, not doubled
+    rs = p.load_reminders()
+    assert len(rs) == 1 and rs[0]["text"] == "a" and rs[0]["when"].startswith("2026-11-20")
+    assert p.remove_reminder(p.action_id(a)) and p.load_reminders() == []
