@@ -1,0 +1,21 @@
+do - Show open action items
+nudge - One action to do now
+done - Tick off actions, e.g. /done 2
+skip - Drop actions, e.g. /skip 3
+high - Make an action high priority, e.g. /high 3
+low - Make an action low priority, e.g. /low 3
+normal - Reset priority, e.g. /normal 3
+stats - Last 7 days summary
+search - Search notes, e.g. /search strix
+notes - List latest notes
+note - Open a note, e.g. /note 1
+file - Get a note as a file, e.g. /file 1
+tags - List all tags
+tag - Notes with a tag, e.g. /tag python
+renametag - Rename a tag, e.g. /renametag claudie claude
+retag - Add tags to older notes
+start - Show help and your user ID
+ask - Ask a question about your notes
+remind - Set a reminder, e.g. /remind 3 friday
+reminders - List upcoming reminders
+unremind - Cancel a reminder, e.g. /unremind 1
