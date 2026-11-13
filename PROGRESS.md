@@ -1,6 +1,6 @@
 # Progress - Chat mode (talk to the bot about your notes)
 Branch: feature/chat-mode
-Last updated: 2026-11-14 00:15 (Hobart)
+Last updated: 2026-11-14 00:20 (Hobart)
 
 ## Plan
 1. chat_reply(): find matching notes (this + previous message), friendly system prompt, recent history, local Ollama /api/chat
@@ -12,11 +12,13 @@ Last updated: 2026-11-14 00:15 (Hobart)
 
 - Step 2: Normal text messages go to chat mode (links still make notes, /commands unchanged); typing indicator; sources listed under the reply and usable with /note; friendly message if Ollama is off; /newchat; main() split into build_app() + main() so routing can be tested (8 new tests)
 
+- Step 3: README (chat mode, /newchat)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 3: README, BotFather list
+- All steps done. User: merge the PR, git pull, restart the bot, chat with it, add newchat in BotFather
 
 ## Decisions
 - Message routing order matters: the link handler is registered before the chat handler, so a link is never treated as chat. A test checks this.
