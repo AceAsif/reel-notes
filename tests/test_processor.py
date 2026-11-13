@@ -259,7 +259,7 @@ def test_ask_ai_says_not_found(notes, monkeypatch):
 
 def test_ask_drops_weak_matches(notes, monkeypatch):
     strong = make_note(title="Claude Memory Plugin Claude Memory", source="https://x/a")
-    make_note(title="Cooking", source="https://x/b",
+    make_note(title="Cooking", source="https://x/b", tags=["food"],
               key_points=["memory of grandma's food"])
     seen = {}
     monkeypatch.setattr(p, "ask_ollama_json",
