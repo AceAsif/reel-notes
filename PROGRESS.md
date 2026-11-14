@@ -1,6 +1,6 @@
 # Progress - Creator info + GitHub repo check
 Branch: feature/creator-and-repo-check
-Last updated: 2026-11-15 00:48 (Hobart)
+Last updated: 2026-11-15 01:04 (Hobart)
 
 ## Plan
 1. Save the creator (name, @handle, profile link) and a "From the creator" section with their offers (comment X, DM, link in bio); better promo filter; /plan puts offers in a "Backup if a link is wrong" part
@@ -16,6 +16,8 @@ Last updated: 2026-11-15 00:48 (Hobart)
 
 - Screenshots → notes (albums = one note); qwen3:8b default with thinking off; roadmap courses no longer get GitHub repos
 
+- #20 /redo (old note to old/ folder), #19 nightly yt-dlp update + /update, #18 /health
+
 ## In progress
 - (none)
 
@@ -23,6 +25,7 @@ Last updated: 2026-11-15 00:48 (Hobart)
 - Nothing; waiting for merge
 
 ## Decisions
+- /redo moves the old note to NOTES_DIR/old instead of deleting it (private data, can be restored)
 - Plain 'GitHub' in a roadmap isn't a code hint; course/docs/tutorial names never searched on GitHub
 - Common words (Settings, Muse) matched random popular repos; now a code hint (GitHub, open source, install command...) is needed
 - Rate limits (403) are not treated as 'not found', so a busy API never shows a false warning
