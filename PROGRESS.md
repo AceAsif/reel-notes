@@ -1,6 +1,6 @@
 # Progress - Small improvements + /plan
 Branch: feature/small-improvements
-Last updated: 2026-11-14 14:55 (Hobart)
+Last updated: 2026-11-14 15:05 (Hobart)
 
 ## Plan
 1. Chat fixes: follow-ups reuse the previous notes; no invented steps; mention unverified claims
@@ -21,11 +21,13 @@ Last updated: 2026-11-14 14:55 (Hobart)
 
 - Step 5: Monthly learning summary on the 1st at 9:30 am (previous month) + /month and /month last: topics learned (top tags), reels saved by category, actions done/skipped with the finished ones listed; weekly_stats refactored into stats_between (3 new tests)
 
+- Step 6: README (paged /todo, /plan, /remember, /month, automatic messages, RESURFACE) and .env.example
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 6: README, .env.example (RESURFACE), BotFather list
+- All steps done. User: merge the PR, git pull, restart, try /todo, /plan 1, /remember, /month; update BotFather
 
 ## Decisions
 - /plan uses a fixed template, not the AI, so the plan only contains what's really in the note; Claude does the thinking when the user pastes it.

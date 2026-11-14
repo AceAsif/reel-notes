@@ -39,13 +39,16 @@ Reel video ───────────────────────
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
-| `/todo` | Numbered list of open action items, grouped by reel |
+| `/todo` | Open actions in pages of 10 (⬅️ ➡️ buttons), grouped by priority and reel. `/todo high` shows only 🔥 ones, `/todo 2` opens page 2 |
 | `/done 2` | Ticks off item 2 (or several: `/done 1 3 4`) |
 | `/high 3`, `/low 3`, `/normal 3` | Change an action's priority. `/todo` lists 🔥 high first, then normal, then 🔽 low |
 | `/remind 3 friday` | Reminds you about `/todo` item 3. Understands `tomorrow 5pm`, `monday`, `in 2 hours`, `in 3 days`, `next week`, `20/11 9am`, `25 dec`. No time means 9:00 am. The reminder has ✅ Done / ⏭ Skip / ⏰ Tomorrow buttons, and a reminder missed while the PC was off is sent when the bot starts again |
 | `/reminders`, `/unremind 1` | List upcoming reminders, or cancel one. Actions with a reminder show 🔔 in `/todo` |
 | `/skip 3` | Drops an action you've decided not to do. It's kept in the note as `- [-]` but hidden from `/todo` |
 | *(type a normal message)* | **Chat mode**: talk to the bot about your notes, e.g. *"what did I save about Claude?"*, then follow-ups like *"how do I install it?"*. It uses only facts from your notes (with the notes listed under the reply) and remembers the last 6 back-and-forth messages. Runs on your local Ollama model, free and private |
+| `/plan 2` | Turns note 2 (from `/notes`, `/search`, `/tag` or a chat reply) into a **ready-to-paste prompt for Claude** in ART format (Act as / Request / Terms: Instructions, Constraints, Output). Built only from the note: open actions, key points, links and claims to verify. Add your own goal: `/plan 2 I want to use it in my bot` |
+| `/remember` | One older note's key quote or key point, to refresh your memory (🔁 for another) |
+| `/month`, `/month last` | Your learning this month so far, or last month: topics, reels saved, actions finished |
 | `/newchat` | Forget the current conversation and start fresh |
 | `/ask your question` | Answers from **your saved notes only**, e.g. `/ask which tools help Claude remember things?`. Shows which notes it used, so you can check. If nothing matches, it says so instead of guessing |
 | `/search strix` | Finds every note that mentions it. Several words must all match: `/search claude memory` |
@@ -60,7 +63,7 @@ Reel video ───────────────────────
 | `/stats` | The last 7 days: reels saved, actions done and skipped, top topics |
 | `/file 1` | Sends note 1 (from your last `/notes`, `/search` or `/tag`) as a `.md` file |
 
-**Automatic messages:** every morning at 8:00 a **daily nudge** sends one action, 🔥 high priority first (change the time with `NUDGE_TIME` in `.env`, or set it to `off`). Every Sunday at 9:00 a **weekly review** sends your stats and the open actions. Ticked actions get a date (`✅ 2026-11-13`, or `❌` for skipped), the same format as the Obsidian Tasks plugin.
+**Automatic messages:** every morning at 8:00 a **daily nudge** sends one action, 🔥 high priority first (change the time with `NUDGE_TIME` in `.env`, or set it to `off`). Every Sunday at 9:00 a **weekly review** sends your stats and the open actions. Every Wednesday at 7:00 pm one **older note resurfaces** (`RESURFACE=off` to stop it). On the 1st of each month at 9:30 am you get a **monthly learning summary**. Ticked actions get a date (`✅ 2026-11-13`, or `❌` for skipped), the same format as the Obsidian Tasks plugin.
 
 **Action priorities.** The AI marks each action 🔥 high (specific, quick, clearly useful), normal, or 🔽 low (optional, vague, or "follow the creator"). The icon is saved in the note (`- [ ] 🔥 ...`), and you can change it with `/high`, `/normal` and `/low`.
 
@@ -176,6 +179,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `TIMEZONE` | `Australia/Hobart` | For the weekly reminder |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
 | `MAX_MINUTES` | `10` | Longest video accepted (for YouTube links) |
+| `RESURFACE` | `on` | Weekly "remember this?" message; `off` to disable |
 | `NUDGE_TIME` | `08:00` | Time for the daily nudge (24-hour), or `off` |
 | `COOKIES_FILE` | — | Only if Instagram/Facebook downloads need a login |
 | `GITHUB_TOKEN` | — | Optional. Higher GitHub API limits for repo lookups |
