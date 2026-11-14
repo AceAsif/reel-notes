@@ -23,3 +23,6 @@ newchat - Start a fresh conversation
 plan - Turn a note into a Claude prompt, e.g. /plan 1
 remember - Refresh an older note
 month - This month's learning summary
+redo - Make a note again (newest, or by title)
+health - Check that everything is working
+update - Update yt-dlp now
