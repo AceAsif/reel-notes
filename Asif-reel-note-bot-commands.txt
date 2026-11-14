@@ -20,3 +20,6 @@ remind - Set a reminder, e.g. /remind 3 friday
 reminders - List upcoming reminders
 unremind - Cancel a reminder, e.g. /unremind 1
 newchat - Start a fresh conversation
+plan - Turn a note into a Claude prompt, e.g. /plan 1
+remember - Refresh an older note
+month - This month's learning summary
