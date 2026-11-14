@@ -894,20 +894,24 @@ DONE_DATE_RE = re.compile(r"^- \[(x|-)\] .*(✅|❌) (\d{4}-\d{2}-\d{2})\s*$")
 
 
 def weekly_stats(today: date | None = None, days: int = 7) -> dict:
-    """What happened in the last `days` days: reels saved, actions done/skipped,
-    categories, most-used tags, plus what's still open."""
+    """What happened in the last `days` days (see stats_between)."""
     today = today or date.today()
-    start = today - timedelta(days=days - 1)
-    stats = {"start": start, "end": today, "saved": 0, "done": 0, "skipped": 0,
-             "categories": {}, "tags": {}}
+    return stats_between(today - timedelta(days=days - 1), today)
+
+
+def stats_between(start: date, end: date) -> dict:
+    """Reels saved, actions done/skipped (with their texts), categories and tags
+    between two dates (inclusive), plus what's still open now."""
+    stats = {"start": start, "end": end, "saved": 0, "done": 0, "skipped": 0,
+             "categories": {}, "tags": {}, "done_items": []}
     if NOTES_DIR.exists():
-        for path in NOTES_DIR.glob("*.md"):
+        for path in sorted(NOTES_DIR.glob("*.md")):
             try:
                 created = date.fromisoformat(path.name[:10])
             except ValueError:
                 created = None
             text = path.read_text(encoding="utf-8")
-            if created and start <= created <= today:
+            if created and start <= created <= end:
                 stats["saved"] += 1
                 m = re.search(r"^- Category: (\w+)", text, re.M)
                 cat = m.group(1) if m else "other"
@@ -916,13 +920,28 @@ def weekly_stats(today: date | None = None, days: int = 7) -> dict:
                     stats["tags"][t] = stats["tags"].get(t, 0) + 1
             for line in text.splitlines():
                 m = DONE_DATE_RE.match(line)
-                if m and start <= date.fromisoformat(m.group(3)) <= today:
-                    stats["done" if m.group(1) == "x" else "skipped"] += 1
+                if m and start <= date.fromisoformat(m.group(3)) <= end:
+                    if m.group(1) == "x":
+                        stats["done"] += 1
+                        item = re.sub(r"^- \[x\] (🔥 |🔽 )?", "", line)
+                        stats["done_items"].append(re.sub(r"\s*✅ \S+\s*$", "", item))
+                    else:
+                        stats["skipped"] += 1
     actions = open_actions()
     stats["open"] = len(actions)
     stats["open_high"] = sum(a["priority"] == "high" for a in actions)
-    stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:5]
     return stats
+
+
+def month_range(today: date | None = None, previous: bool = False) -> tuple[date, date]:
+    """(first day, last day) of this month so far, or of the whole previous month."""
+    today = today or date.today()
+    first = today.replace(day=1)
+    if previous:
+        last = first - timedelta(days=1)
+        return last.replace(day=1), last
+    return first, today
 
 
 # ---- daily nudge ----------------------------------------------------------

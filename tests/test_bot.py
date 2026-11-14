@@ -167,3 +167,30 @@ def test_resurface_message(tmp_path, monkeypatch):
 def test_resurface_message_when_no_old_notes(tmp_path, monkeypatch):
     monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
     assert bot.resurface_message()[2] is None
+
+
+def test_month_text(tmp_path, monkeypatch):
+    from datetime import date
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    today = date.today().isoformat()
+    (folder / f"{today}_1200_a.md").write_text(
+        f"# A\n\n- Category: tech\n- Tags: #claude #github\n\n## Action items\n"
+        f"- [x] 🔥 Read the Strix README ✅ {today}\n- [ ] Try Claude mem\n", encoding="utf-8")
+    text = bot.month_text()
+    assert "so far" in text and "#claude (1 reel)" in text
+    assert "Reels saved: 1 (1 tech)" in text and "Actions done: 1" in text
+    assert "• Read the Strix README" in text and "Still open: 1" in text
+
+
+def test_month_text_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    assert "No reels saved" in bot.month_text()
+
+
+def test_month_range():
+    from datetime import date
+    assert bot.processor.month_range(date(2026, 11, 14)) == (date(2026, 11, 1), date(2026, 11, 14))
+    assert bot.processor.month_range(date(2026, 1, 1), previous=True) == \
+        (date(2025, 12, 1), date(2025, 12, 31))

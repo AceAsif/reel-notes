@@ -854,6 +854,45 @@ def stats_text() -> str:
     return "\n".join(lines)
 
 
+def month_text(previous: bool = False) -> str:
+    start, end = processor.month_range(previous=previous)
+    s = processor.stats_between(start, end)
+    title = f"{start:%B %Y}" + ("" if previous else " so far")
+    lines = [f"🗓 Your learning in {title}", ""]
+    if s["saved"] == 0 and s["done"] == 0:
+        return "\n".join(lines + ["No reels saved or actions done yet this month.",
+                                   "Send me a reel to get started! 🎬"])
+    if s["top_tags"]:
+        lines += ["📚 You learned about:"]
+        lines += [f"   • #{t} ({n} reel{'s' * (n != 1)})" for t, n in s["top_tags"]]
+        lines.append("")
+    cats = ", ".join(f"{n} {c}" for c, n in sorted(s["categories"].items(), key=lambda kv: -kv[1]))
+    lines.append(f"🎬 Reels saved: {s['saved']}" + (f" ({cats})" if cats else ""))
+    lines.append(f"✅ Actions done: {s['done']}   ⏭ Skipped: {s['skipped']}")
+    if s["done_items"]:
+        lines += ["", "🏆 What you finished:"] + [f"   • {d}" for d in s["done_items"][:5]]
+        if len(s["done_items"]) > 5:
+            lines.append(f"   ...and {len(s['done_items']) - 5} more")
+    lines += ["", f"📋 Still open: {s['open']}"
+              + (f" ({s['open_high']} 🔥 high)" if s["open_high"] else "")]
+    if s["done"] >= 10:
+        lines.append("🎉 Amazing month, you're really acting on what you learn!")
+    elif s["saved"] > 0 and s["done"] == 0:
+        lines.append("💪 Lots saved, nothing done yet. Try /nudge for one easy action.")
+    return "\n".join(lines)[:4000]
+
+
+async def month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/month = this month so far, /month last = the whole previous month."""
+    if is_allowed(update):
+        previous = bool(context.args) and context.args[0].lower() in ("last", "previous")
+        await update.message.reply_text(month_text(previous))
+
+
+async def monthly_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await context.bot.send_message(context.job.chat_id, month_text(previous=True))
+
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stats shows the last 7 days."""
     if is_allowed(update):
@@ -916,6 +955,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("newchat", newchat))
     app.add_handler(CommandHandler("plan", plan))
     app.add_handler(CommandHandler("remember", remember))
+    app.add_handler(CommandHandler("month", month))
     app.add_handler(CallbackQueryHandler(resurface_button_pressed, pattern=r"^resurf:"))
 
     if ALLOWED_USER_ID:
@@ -943,6 +983,9 @@ def build_app() -> Application:
             app.job_queue.run_daily(weekly_resurface,
                                     time=datetime.time(19, 0, tzinfo=TIMEZONE),
                                     days=(3,), chat_id=int(ALLOWED_USER_ID))
+        # 1st of every month, 9:30 am: summary of the previous month
+        app.job_queue.run_monthly(monthly_summary, when=datetime.time(9, 30, tzinfo=TIMEZONE),
+                                  day=1, chat_id=int(ALLOWED_USER_ID))
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))
