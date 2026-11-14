@@ -367,3 +367,81 @@ def test_chat_history_is_limited(notes, monkeypatch):
                for i in range(40)]
     p.chat_reply("hello", history)
     assert len(sent["body"]["messages"]) == 1 + p.CHAT_HISTORY_TURNS * 2 + 1
+
+
+@pytest.mark.parametrize("msg,expected", [
+    ("which one should I try first?", True),
+    ("how do I install it?", True),
+    ("tell me more", True),
+    ("what did I save about claude plugins?", False),
+    ("design skills for landing pages and animations in react apps", False),
+])
+def test_is_follow_up(msg, expected):
+    assert p.is_follow_up(msg) is expected
+
+
+def test_follow_up_keeps_previous_notes(notes, monkeypatch):
+    claude = make_note(title="Claude Plugins Strix Mem", source="https://x/a")
+    make_note(title="Try First Trading Skill", source="https://x/b", tags=["trading"])
+    capture_chat(monkeypatch)
+    history = [{"role": "user", "content": "what did I save about claude plugins?"},
+               {"role": "assistant", "content": "..."}]
+    _, sources = p.chat_reply("which one should I try first?", history)
+    assert sources[0] == claude
+
+
+def test_chat_prompt_forbids_invented_steps():
+    assert "NEVER invent steps" in p.CHAT_SYSTEM and "Claims to check" in p.CHAT_SYSTEM
+
+
+# ---- /plan ----------------------------------------------------------------------
+
+def test_make_plan_uses_only_note_content(notes):
+    path = make_note(category="programming", title="5 Claude Plugins",
+                     actions=[{"text": "Read the Strix README", "priority": "high"}, "Try Claude mem"],
+                     resources=[{"name": "Strix", "link": "https://github.com/usestrix/strix"}],
+                     claims=[{"claim": "7 billion free tokens", "why": "no source"}],
+                     key_points=["Strix finds security holes"])
+    p.complete_actions([2])                       # 'Try Claude mem' done: not in the plan
+    plan = p.make_plan(path, "use it in my bot")
+    assert plan.startswith("ACT AS: an experienced software engineer")
+    assert "REQUEST:" in plan and "TERMS" in plan and "Constraints:" in plan and "Output:" in plan
+    assert "1. Read the Strix README" in plan and "Try Claude mem" not in plan
+    assert "https://github.com/usestrix/strix" in plan
+    assert '"7 billion free tokens"' in plan and "My goal: use it in my bot" in plan
+    assert "🔥" not in plan and "## " not in plan
+
+
+def test_make_plan_without_actions(notes):
+    path = make_note(category="motivation", actions=["x"])
+    p.complete_actions([1])
+    plan = p.make_plan(path)
+    assert "supportive personal coach" in plan and "Suggest 3-5 practical actions" in plan
+
+
+def test_make_plan_skips_creator_promo_actions(notes):
+    path = make_note(actions=["Check the broadcast channel from the bio", "Read the README"])
+    plan = p.make_plan(path)
+    assert "1. Read the README" in plan and "broadcast channel" not in plan
+
+
+# ---- resurface --------------------------------------------------------------------
+
+def test_resurface_picks_only_old_notes_and_rotates(notes):
+    from datetime import date
+    (notes / "2026-10-01_1200_a.md").write_text(
+        "# Old A\n\n## Key points\n- point A1\n- point A2\n", encoding="utf-8")
+    (notes / "2026-10-02_1200_b.md").write_text(
+        "# Old B\n\n## Key quote\n> Stay hungry  *(paraphrased)*\n", encoding="utf-8")
+    (notes / "2026-11-13_1200_new.md").write_text("# New\n\n## Key points\n- n\n", encoding="utf-8")
+    today = date(2026, 11, 14)
+    titles = {p.pick_resurface(today, shift=s)["title"] for s in range(4)}
+    assert titles == {"Old A", "Old B"}                     # never the 1-day-old note
+    quote = next(r for s in range(2) if (r := p.pick_resurface(today, shift=s))["title"] == "Old B")
+    assert quote["kind"] == "quote" and quote["text"] == "Stay hungry"
+
+
+def test_resurface_none_when_all_new(notes):
+    from datetime import date
+    (notes / "2026-11-13_1200_new.md").write_text("# New\n", encoding="utf-8")
+    assert p.pick_resurface(date(2026, 11, 14)) is None

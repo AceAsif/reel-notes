@@ -1,30 +1,38 @@
-# Progress - Chat mode (talk to the bot about your notes)
-Branch: feature/chat-mode
-Last updated: 2026-11-14 00:20 (Hobart)
+# Progress - Small improvements + /plan
+Branch: feature/small-improvements
+Last updated: 2026-11-14 15:05 (Hobart)
 
 ## Plan
-1. chat_reply(): find matching notes (this + previous message), friendly system prompt, recent history, local Ollama /api/chat
-2. Bot: normal text messages go to chat mode (links still make notes), "typing..." indicator, sources list, /newchat to forget the conversation
-3. README, help text, BotFather list
+1. Chat fixes: follow-ups reuse the previous notes; no invented steps; mention unverified claims
+2. /todo in pages (10 per page, Prev/Next buttons) + /todo high|normal|low filter
+3. /plan N: turn a note into a ready-to-paste Claude prompt (ART format)
+4. Resurface an old note once a week
+5. Monthly learning summary (1st of each month) + /month
+6. README, help text, BotFather list
 
 ## Done
-- Step 1: chat_reply() with relevant_notes() (shared with /ask), friendly "Reel Notes" system prompt that only uses facts from the notes, last 6 back-and-forth turns, Markdown cleanup (4 new tests)
+- Step 1: is_follow_up() so "which one first?" reuses the previous question's notes; chat prompt forbids invented steps/settings and flags "Claims to check" (8 new tests)
 
-- Step 2: Normal text messages go to chat mode (links still make notes, /commands unchanged); typing indicator; sources listed under the reply and usable with /note; friendly message if Ollama is off; /newchat; main() split into build_app() + main() so routing can be tested (8 new tests)
+- Step 2: /todo in pages of 10 with Prev/Next buttons, counts per priority, real /todo numbers kept; /todo high|normal|low and /todo 2 (4 new tests)
 
-- Step 3: README (chat mode, /newchat)
+- Step 3: /plan N [my goal] - turns a note into a ready-to-paste Claude prompt in ART format (Act as / Request / Terms: Instructions, Constraints, Output), built only from the note (open actions, key points, links, claims to verify); creator-promo actions left out; very long plans sent as a .txt file (3 new tests)
+
+- Step 4: Weekly resurface (Wednesday 7 pm, RESURFACE=off to disable) + /remember: one note older than 7 days, rotating weekly; shows its key quote, a key point or lesson; '🔁 Another one' button; /note 1 opens it (4 new tests)
+
+- Step 5: Monthly learning summary on the 1st at 9:30 am (previous month) + /month and /month last: topics learned (top tags), reels saved by category, actions done/skipped with the finished ones listed; weekly_stats refactored into stats_between (3 new tests)
+
+- Step 6: README (paged /todo, /plan, /remember, /month, automatic messages, RESURFACE) and .env.example
 
 ## In progress
 - (none)
 
 ## Next step
-- All steps done. User: merge the PR, git pull, restart the bot, chat with it, add newchat in BotFather
+- All steps done. User: merge the PR, git pull, restart, try /todo, /plan 1, /remember, /month; update BotFather
 
 ## Decisions
-- Message routing order matters: the link handler is registered before the chat handler, so a link is never treated as chat. A test checks this.
-- Uses only the local qwen2.5:7b model through Ollama (free, private), as the user asked.
-- Notes are found from the current AND previous user message, so follow-up questions work.
-- temperature 0.4: a bit more natural than notes (0.2) but still careful.
+- /plan uses a fixed template, not the AI, so the plan only contains what's really in the note; Claude does the thinking when the user pastes it.
+- /plan added to this batch: the user asked about it and it's small.
+- Follow-up = short message (<= 4 meaningful words) with a pointing word (it, that, which, first, more...).
 
 ## Problems / questions for the user
 - (none yet)

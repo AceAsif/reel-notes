@@ -894,20 +894,24 @@ DONE_DATE_RE = re.compile(r"^- \[(x|-)\] .*(✅|❌) (\d{4}-\d{2}-\d{2})\s*$")
 
 
 def weekly_stats(today: date | None = None, days: int = 7) -> dict:
-    """What happened in the last `days` days: reels saved, actions done/skipped,
-    categories, most-used tags, plus what's still open."""
+    """What happened in the last `days` days (see stats_between)."""
     today = today or date.today()
-    start = today - timedelta(days=days - 1)
-    stats = {"start": start, "end": today, "saved": 0, "done": 0, "skipped": 0,
-             "categories": {}, "tags": {}}
+    return stats_between(today - timedelta(days=days - 1), today)
+
+
+def stats_between(start: date, end: date) -> dict:
+    """Reels saved, actions done/skipped (with their texts), categories and tags
+    between two dates (inclusive), plus what's still open now."""
+    stats = {"start": start, "end": end, "saved": 0, "done": 0, "skipped": 0,
+             "categories": {}, "tags": {}, "done_items": []}
     if NOTES_DIR.exists():
-        for path in NOTES_DIR.glob("*.md"):
+        for path in sorted(NOTES_DIR.glob("*.md")):
             try:
                 created = date.fromisoformat(path.name[:10])
             except ValueError:
                 created = None
             text = path.read_text(encoding="utf-8")
-            if created and start <= created <= today:
+            if created and start <= created <= end:
                 stats["saved"] += 1
                 m = re.search(r"^- Category: (\w+)", text, re.M)
                 cat = m.group(1) if m else "other"
@@ -916,13 +920,28 @@ def weekly_stats(today: date | None = None, days: int = 7) -> dict:
                     stats["tags"][t] = stats["tags"].get(t, 0) + 1
             for line in text.splitlines():
                 m = DONE_DATE_RE.match(line)
-                if m and start <= date.fromisoformat(m.group(3)) <= today:
-                    stats["done" if m.group(1) == "x" else "skipped"] += 1
+                if m and start <= date.fromisoformat(m.group(3)) <= end:
+                    if m.group(1) == "x":
+                        stats["done"] += 1
+                        item = re.sub(r"^- \[x\] (🔥 |🔽 )?", "", line)
+                        stats["done_items"].append(re.sub(r"\s*✅ \S+\s*$", "", item))
+                    else:
+                        stats["skipped"] += 1
     actions = open_actions()
     stats["open"] = len(actions)
     stats["open_high"] = sum(a["priority"] == "high" for a in actions)
-    stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    stats["top_tags"] = sorted(stats["tags"].items(), key=lambda kv: (-kv[1], kv[0]))[:5]
     return stats
+
+
+def month_range(today: date | None = None, previous: bool = False) -> tuple[date, date]:
+    """(first day, last day) of this month so far, or of the whole previous month."""
+    today = today or date.today()
+    first = today.replace(day=1)
+    if previous:
+        last = first - timedelta(days=1)
+        return last.replace(day=1), last
+    return first, today
 
 
 # ---- daily nudge ----------------------------------------------------------
@@ -1167,6 +1186,10 @@ How to talk:
   Copy names, commands and links exactly. If the notes don't cover it, say
   "I don't have that in your notes" and suggest saving a reel about it.
   Never invent tools, links, numbers or quotes.
+- NEVER invent steps, install instructions, menus or settings. Only give steps that
+  are written in the notes. If the notes have no steps, say so and suggest
+  "/plan <number>" to get a ready-made prompt for Claude.
+- If a note lists something under "Claims to check", say it's not verified yet.
 - Small talk (hello, thanks, how are you) is fine: answer briefly and kindly.
 - When it helps, suggest a next step, e.g. "Want a reminder? /remind 2 friday".
 - Use plain text only, no Markdown symbols like ** or ##.
@@ -1175,6 +1198,13 @@ MY NOTES FOR THIS MESSAGE:
 <<NOTES>>
 """
 CHAT_HISTORY_TURNS = 6          # remembered back-and-forth messages
+FOLLOW_UP_RE = re.compile(r"\b(it|its|that|this|these|those|them|they|one|first|second|"
+                          r"third|last|more|else|again|next|which|same|above)\b", re.I)
+
+
+def is_follow_up(message: str) -> bool:
+    """Short message that points back at the last answer ('which one first?')."""
+    return bool(FOLLOW_UP_RE.search(message)) and len(question_words(message)) <= 4
 
 
 def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[str, list[Path]]:
@@ -1186,8 +1216,12 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     Returns (reply text, notes that were given to the AI).
     """
     previous = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-    hits = relevant_notes(message, max_notes) or relevant_notes(previous + " " + message,
-                                                                max_notes)
+    if previous and is_follow_up(message):
+        # "which one should I try first?" is about the notes we were just discussing
+        hits = relevant_notes(previous + " " + message, max_notes)
+    else:
+        hits = relevant_notes(message, max_notes) or relevant_notes(previous + " " + message,
+                                                                    max_notes)
     notes = "\n\n".join(f"[Note {n}: {h['title']}]\n{note_summary_text(h['path'])[:2000]}"
                          for n, h in enumerate(hits, start=1)) or "(no matching notes)"
     messages = [{"role": "system", "content": CHAT_SYSTEM.replace("<<NOTES>>", notes)}]
@@ -1204,3 +1238,116 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     reply = re.sub(r"\*\*|__|^#+\s*", "", reply, flags=re.M)   # strip Markdown leftovers
     return reply or "Sorry, I couldn't think of an answer. Can you ask another way?", \
         [h["path"] for h in hits]
+
+
+# ---- /plan: turn a note into a ready-to-paste prompt for Claude ---------------
+
+def note_sections(path: Path) -> dict:
+    """{'title':..., 'category':..., 'source':..., 'Summary': [lines], ...}."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    sections = {"title": lines[0].lstrip("# ").strip() if lines else path.stem}
+    current = None
+    for line in lines[1:]:
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = []
+        elif current is None:
+            m = re.match(r"- (Category|Source): (.*)", line)
+            if m:
+                sections[m.group(1).lower()] = m.group(2).strip()
+        elif line.strip():
+            sections[current].append(line.strip())
+    return sections
+
+
+ACT_AS = {
+    "programming": "an experienced software engineer and AI-tools expert",
+    "tech": "an experienced tech expert who explains AI tools clearly",
+    "motivation": "a supportive personal coach who turns ideas into small habits",
+}
+
+
+def make_plan(path: Path, my_goal: str = "") -> str:
+    """A prompt in ART format (Act as / Request / Terms: Instructions, Constraints,
+    Output) built ONLY from the note's own content — no AI, so nothing is invented."""
+    s = note_sections(path)
+    category = s.get("category", "other")
+    open_actions = [re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line) for line in
+                    s.get("Action items", []) + s.get("Habit to try", [])
+                    if line.startswith("- [ ] ")]
+    # "Check my bio / DM me / comment X" actions are for the creator, not for Claude
+    open_actions = [a for a in open_actions if not LOW_PRIORITY_RE.search(a)]
+    summary = " ".join(s.get("Summary", []))
+    key_points = [line.lstrip("- ") for line in s.get("Key points", [])][:7]
+    resources = [line.lstrip("- ") for line in s.get("Resources", [])][:8]
+    claims = [line.lstrip("- ").replace("⚠️ ", "") for line in s.get("Claims to check", [])]
+
+    out = [f"ACT AS: {ACT_AS.get(category, 'a helpful expert assistant')}.", "",
+           f"REQUEST: Help me act on what I learned from a short video: \"{s['title']}\"."]
+    if summary:
+        out.append(f"What it was about: {summary}")
+    if my_goal:
+        out.append(f"My goal: {my_goal}")
+    out += ["", "TERMS", "", "Instructions:"]
+    if open_actions:
+        out.append("Help me complete these actions, in a sensible order:")
+        out += [f"{i}. {a}" for i, a in enumerate(open_actions, 1)]
+    else:
+        out.append("Suggest 3-5 practical actions I can take from this video, then help me do them.")
+    if key_points:
+        out += ["", "What the video said (key points):"] + [f"- {k}" for k in key_points]
+    if resources:
+        out += ["", "Tools and links from the video:"] + [f"- {r}" for r in resources]
+    out += ["", "Constraints:",
+            "- First check that each tool or link is real, current and safe to use; "
+            "tell me if something looks outdated, unsafe or like a scam.",
+            "- Prefer official sources (GitHub repos, official docs) over the video's claims."]
+    out += [f"- Verify this claim before relying on it: {c}" for c in claims]
+    out += ["- I use Windows. Give exact commands I can copy.",
+            "- Use simple English (English is not my first language).",
+            "- Ask me before installing anything or changing my files or accounts."]
+    out += ["", "Output:",
+            "- A step-by-step plan: for each step, what to do, why, and how long it takes.",
+            "- Exact commands or settings where needed.",
+            "- A short checklist at the end that I can tick off."]
+    if s.get("source"):
+        out += ["", f"(Source video: {s['source']})"]
+    return "\n".join(out)
+
+
+# ---- resurface an old note (spaced repetition) ------------------------------------
+
+def pick_resurface(today: date | None = None, min_age_days: int = 7,
+                   shift: int = 0) -> dict | None:
+    """One older note to look at again, rotating week by week (shift = 'another one').
+    Returns {'path', 'title', 'text', 'kind', 'age_days'} or None."""
+    today = today or date.today()
+    if not NOTES_DIR.exists():
+        return None
+    old = []
+    for path in sorted(NOTES_DIR.glob("*.md")):
+        try:
+            saved = date.fromisoformat(path.name[:10])
+        except ValueError:
+            continue
+        if (today - saved).days >= min_age_days:
+            old.append((path, saved))
+    if not old:
+        return None
+    week = today.toordinal() // 7 + shift
+    path, saved = old[week % len(old)]
+    s = note_sections(path)
+    quote = [line.lstrip("> ").replace("*(paraphrased)*", "").strip()
+             for line in s.get("Key quote", [])]
+    points = [line.lstrip("- ") for line in s.get("Key points", [])]
+    lesson = s.get("Main lesson", [])
+    if quote and quote[0]:
+        text, kind = quote[0], "quote"
+    elif points:
+        text, kind = points[week % len(points)], "point"
+    elif lesson:
+        text, kind = lesson[0], "lesson"
+    else:
+        text, kind = " ".join(s.get("Summary", [])), "summary"
+    return {"path": path, "title": s["title"], "text": text, "kind": kind,
+            "age_days": (today - saved).days}

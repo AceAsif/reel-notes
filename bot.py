@@ -77,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /search strix\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
@@ -166,15 +166,32 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await status.edit_text(format_reply(data, note_path))
 
 
-def actions_text() -> str:
-    actions = processor.open_actions()
-    if not actions:
-        return "🎉 No open action items."
+TODO_PAGE_SIZE = 10
+LEVELS = ("high", "normal", "low")
+
+
+def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
+    """One page of /todo (10 actions). Numbers are the real /todo numbers, so
+    /done 23 works from any page. level='high' shows only 🔥 actions."""
+    all_actions = list(enumerate(processor.open_actions(), start=1))
+    if not all_actions:
+        return "🎉 No open action items.", None
+    items = [(n, a) for n, a in all_actions if level is None or a["priority"] == level]
+    if not items:
+        return f"No {level} priority actions. See everything with /todo", None
+    pages = (len(items) + TODO_PAGE_SIZE - 1) // TODO_PAGE_SIZE
+    page = max(1, min(page, pages))
+    shown = items[(page - 1) * TODO_PAGE_SIZE: page * TODO_PAGE_SIZE]
+
     headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
     reminded = {r["action_id"] for r in processor.load_reminders()}
-    lines = [f"You have {len(actions)} open action items:"]
+    counts = {lv: sum(a["priority"] == lv for _, a in all_actions) for lv in LEVELS}
+    what = f"{level} priority " if level else ""
+    lines = [f"📋 {len(items)} open {what}actions"
+             + (f" (page {page}/{pages})" if pages > 1 else "") + ":",
+             f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low"]
     current_priority, current_title = None, None
-    for n, a in enumerate(actions, start=1):
+    for n, a in shown:
         if a["priority"] != current_priority:   # priority section
             current_priority, current_title = a["priority"], None
             lines += ["", f"━━ {headings[a['priority']]} ━━"]
@@ -183,18 +200,51 @@ def actions_text() -> str:
             lines += [f"📌 {current_title}"]
         bell = " 🔔" if processor.action_id(a) in reminded else ""
         lines.append(f"{n}. ☐ {a['action']}{bell}")
-    lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)",
-              "Not doing one? /skip 3   Change priority: /high 3  /low 3  /normal 3",
-              "Reminder: /remind 3 friday   (🔔 = reminder set, see /reminders)"]
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3900] + "\n...\n\nList too long, tick some off with /done first."
-    return text
+    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday",
+              "Only 🔥 ones: /todo high"]
+
+    keyboard = None
+    if pages > 1:
+        tag = level or "all"
+        row = []
+        if page > 1:
+            row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"todo:{tag}:{page - 1}"))
+        row.append(InlineKeyboardButton(f"{page}/{pages}", callback_data=f"todo:{tag}:{page}"))
+        if page < pages:
+            row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
+        keyboard = InlineKeyboardMarkup([row])
+    return "\n".join(lines)[:4000], keyboard
+
+
+def actions_text() -> str:
+    """First page of /todo as plain text (used by the weekly review)."""
+    text, keyboard = todo_page(1)
+    return text + ("\n\nMore pages: send /todo" if keyboard else "")
 
 
 async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if is_allowed(update):
-        await update.message.reply_text(actions_text())
+    """/todo, /todo 2 (page 2), /todo high (only 🔥), /todo low 2."""
+    if not is_allowed(update):
+        return
+    args = [a.lower() for a in (context.args or [])]
+    level = next((a for a in args if a in LEVELS), None)
+    page = next((int(a) for a in args if a.isdigit()), 1)
+    text, keyboard = todo_page(page, level)
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⬅️ / ➡️ page buttons under /todo."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    _, tag, page = query.data.split(":")
+    text, keyboard = todo_page(int(page), None if tag == "all" else tag)
+    try:
+        await query.edit_message_text(text, reply_markup=keyboard)
+    except Exception:
+        pass                                    # same page pressed again: nothing changed
 
 
 async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -365,6 +415,41 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_allowed(update):
         context.chat_data["chat_history"] = []
         await update.message.reply_text("🧹 Fresh start! What would you like to talk about?")
+
+
+def note_from_list(context, args) -> tuple[Path | None, str]:
+    """Note N from the last /notes, /search, /tag or chat reply (newest notes if none).
+    Returns (path, rest of the words after the number)."""
+    paths = context.user_data.get("last_results")
+    if not paths:
+        files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
+            if processor.NOTES_DIR.exists() else []
+        paths = [str(f) for f in files]
+    words = list(args or [])
+    n = int(words.pop(0)) if words and words[0].isdigit() else 1
+    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
+        return None, ""
+    return Path(paths[n - 1]), " ".join(words)
+
+
+async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/plan 2  (or /plan 2 my own goal) → a prompt to paste into Claude."""
+    if not is_allowed(update):
+        return
+    path, goal = note_from_list(context, context.args)
+    if path is None:
+        await update.message.reply_text(
+            "Usage: /plan 2  (number from /notes, /search, /tag or a chat reply)\n"
+            "Add your own goal: /plan 2 I want to use it in my bot")
+        return
+    prompt = processor.make_plan(path, goal)
+    await update.message.reply_text(
+        "📋 Here's your action plan. Long-press it → Copy, then paste it into Claude 👇")
+    if len(prompt) <= 4000:
+        await update.message.reply_text(prompt)
+    else:                                         # very long: send as a file instead
+        await update.message.reply_document(document=prompt.encode("utf-8"),
+                                            filename=f"plan_{path.stem[16:] or path.stem}.txt")
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -696,6 +781,61 @@ async def reminder_button_pressed(update: Update, context: ContextTypes.DEFAULT_
                                   f"{action['action']}")
 
 
+# ---- resurface old notes --------------------------------------------------------
+
+RESURFACE = os.getenv("RESURFACE", "on").strip().lower()   # "off" to disable
+
+
+def resurface_message(shift: int = 0) -> tuple[str, InlineKeyboardMarkup | None, Path | None]:
+    item = processor.pick_resurface(shift=shift)
+    if item is None:
+        return ("🧠 No notes older than a week yet. I'll start resurfacing them soon!",
+                None, None)
+    icon = {"quote": "💬", "point": "💡", "lesson": "💡", "summary": "📝"}[item["kind"]]
+    weeks = item["age_days"] // 7
+    ago = f"{weeks} week{'s' * (weeks != 1)} ago" if weeks else f"{item['age_days']} days ago"
+    text = (f"🧠 Remember this?\n\n{icon} {item['text']}\n\n"
+            f"📌 From: {item['title']} (saved {ago})\nOpen the full note: /note 1")
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
+        "🔁 Another one", callback_data=f"resurf:{shift + 1}")]])
+    return text, keyboard, item["path"]
+
+
+def remember_for_note_command(application, chat_id: int, path: Path | None) -> None:
+    """So that '/note 1' opens the resurfaced note."""
+    if path is not None:
+        application.user_data[chat_id]["last_results"] = [str(path)]
+
+
+async def weekly_resurface(context: ContextTypes.DEFAULT_TYPE) -> None:
+    text, keyboard, path = resurface_message()
+    if path is None:
+        return                                  # nothing old enough yet: stay quiet
+    remember_for_note_command(context.application, context.job.chat_id, path)
+    await context.bot.send_message(context.job.chat_id, text, reply_markup=keyboard)
+
+
+async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/remember shows one older note to refresh your memory."""
+    if not is_allowed(update):
+        return
+    text, keyboard, path = resurface_message()
+    if path is not None:
+        context.user_data["last_results"] = [str(path)]
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def resurface_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    text, keyboard, path = resurface_message(int(query.data.split(":")[1]))
+    if path is not None:
+        context.user_data["last_results"] = [str(path)]
+    await query.edit_message_text(text, reply_markup=keyboard)
+
+
 def stats_text() -> str:
     s = processor.weekly_stats()
     lines = [f"📊 Last 7 days ({s['start']:%d %b} – {s['end']:%d %b})", "",
@@ -712,6 +852,45 @@ def stats_text() -> str:
     elif s["done"] >= 5:
         lines += ["", "🎉 Great week, keep it going!"]
     return "\n".join(lines)
+
+
+def month_text(previous: bool = False) -> str:
+    start, end = processor.month_range(previous=previous)
+    s = processor.stats_between(start, end)
+    title = f"{start:%B %Y}" + ("" if previous else " so far")
+    lines = [f"🗓 Your learning in {title}", ""]
+    if s["saved"] == 0 and s["done"] == 0:
+        return "\n".join(lines + ["No reels saved or actions done yet this month.",
+                                   "Send me a reel to get started! 🎬"])
+    if s["top_tags"]:
+        lines += ["📚 You learned about:"]
+        lines += [f"   • #{t} ({n} reel{'s' * (n != 1)})" for t, n in s["top_tags"]]
+        lines.append("")
+    cats = ", ".join(f"{n} {c}" for c, n in sorted(s["categories"].items(), key=lambda kv: -kv[1]))
+    lines.append(f"🎬 Reels saved: {s['saved']}" + (f" ({cats})" if cats else ""))
+    lines.append(f"✅ Actions done: {s['done']}   ⏭ Skipped: {s['skipped']}")
+    if s["done_items"]:
+        lines += ["", "🏆 What you finished:"] + [f"   • {d}" for d in s["done_items"][:5]]
+        if len(s["done_items"]) > 5:
+            lines.append(f"   ...and {len(s['done_items']) - 5} more")
+    lines += ["", f"📋 Still open: {s['open']}"
+              + (f" ({s['open_high']} 🔥 high)" if s["open_high"] else "")]
+    if s["done"] >= 10:
+        lines.append("🎉 Amazing month, you're really acting on what you learn!")
+    elif s["saved"] > 0 and s["done"] == 0:
+        lines.append("💪 Lots saved, nothing done yet. Try /nudge for one easy action.")
+    return "\n".join(lines)[:4000]
+
+
+async def month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/month = this month so far, /month last = the whole previous month."""
+    if is_allowed(update):
+        previous = bool(context.args) and context.args[0].lower() in ("last", "previous")
+        await update.message.reply_text(month_text(previous))
+
+
+async def monthly_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await context.bot.send_message(context.job.chat_id, month_text(previous=True))
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -756,6 +935,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
     app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
+    app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))
@@ -773,6 +953,10 @@ def build_app() -> Application:
     # Added after the link handler, so links still become notes.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     app.add_handler(CommandHandler("newchat", newchat))
+    app.add_handler(CommandHandler("plan", plan))
+    app.add_handler(CommandHandler("remember", remember))
+    app.add_handler(CommandHandler("month", month))
+    app.add_handler(CallbackQueryHandler(resurface_button_pressed, pattern=r"^resurf:"))
 
     if ALLOWED_USER_ID:
         # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)
@@ -794,6 +978,14 @@ def build_app() -> Application:
             except ValueError:
                 print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
 
+        # Wednesday 7:00 pm: one older note to remember (0 = Sunday, so 3 = Wednesday)
+        if RESURFACE != "off":
+            app.job_queue.run_daily(weekly_resurface,
+                                    time=datetime.time(19, 0, tzinfo=TIMEZONE),
+                                    days=(3,), chat_id=int(ALLOWED_USER_ID))
+        # 1st of every month, 9:30 am: summary of the previous month
+        app.job_queue.run_monthly(monthly_summary, when=datetime.time(9, 30, tzinfo=TIMEZONE),
+                                  day=1, chat_id=int(ALLOWED_USER_ID))
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))

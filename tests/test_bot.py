@@ -114,3 +114,83 @@ def test_newchat_clears_history(monkeypatch):
                             effective_user=types.SimpleNamespace(id=1)),
                             types.SimpleNamespace(chat_data=chat_data)))
     assert chat_data["chat_history"] == []
+
+
+# ---- /todo pages ---------------------------------------------------------------
+
+@pytest.fixture
+def many_actions(tmp_path, monkeypatch):
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    monkeypatch.setattr(bot.processor, "REMINDERS_FILE", tmp_path / "r.json")
+    actions = "\n".join([f"- [ ] 🔥 high {i}" for i in range(3)] +
+                        [f"- [ ] normal {i}" for i in range(20)])
+    (folder / "2026-11-14_1200_x.md").write_text(
+        f"# Note X\n\n## Action items\n{actions}\n", encoding="utf-8")
+
+
+def test_todo_first_page(many_actions):
+    text, kb = bot.todo_page(1)
+    assert "23 open actions (page 1/3)" in text and "1. ☐ high 0" in text
+    assert "11. ☐" not in text
+    assert [b.text for b in kb.inline_keyboard[0]] == ["1/3", "Next ➡️"]
+
+
+def test_todo_last_page_keeps_real_numbers(many_actions):
+    text, kb = bot.todo_page(3)
+    assert "21. ☐ normal 17" in text and "23. ☐ normal 19" in text
+    assert [b.text for b in kb.inline_keyboard[0]] == ["⬅️ Prev", "3/3"]
+
+
+def test_todo_high_filter(many_actions):
+    text, kb = bot.todo_page(1, "high")
+    assert "3 open high priority actions" in text and kb is None
+    assert "normal 0" not in text
+
+
+def test_todo_page_out_of_range(many_actions):
+    assert "page 3/3" in bot.todo_page(99)[0]
+
+
+def test_resurface_message(tmp_path, monkeypatch):
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    (folder / "2020-01-01_1200_a.md").write_text(
+        "# Deep Conversations\n\n## Key quote\n> Ask better questions\n", encoding="utf-8")
+    text, kb, path = bot.resurface_message()
+    assert "💬 Ask better questions" in text and "Deep Conversations" in text
+    assert path.name.startswith("2020-01-01") and kb.inline_keyboard[0][0].callback_data == "resurf:1"
+
+
+def test_resurface_message_when_no_old_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    assert bot.resurface_message()[2] is None
+
+
+def test_month_text(tmp_path, monkeypatch):
+    from datetime import date
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    today = date.today().isoformat()
+    (folder / f"{today}_1200_a.md").write_text(
+        f"# A\n\n- Category: tech\n- Tags: #claude #github\n\n## Action items\n"
+        f"- [x] 🔥 Read the Strix README ✅ {today}\n- [ ] Try Claude mem\n", encoding="utf-8")
+    text = bot.month_text()
+    assert "so far" in text and "#claude (1 reel)" in text
+    assert "Reels saved: 1 (1 tech)" in text and "Actions done: 1" in text
+    assert "• Read the Strix README" in text and "Still open: 1" in text
+
+
+def test_month_text_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    assert "No reels saved" in bot.month_text()
+
+
+def test_month_range():
+    from datetime import date
+    assert bot.processor.month_range(date(2026, 11, 14)) == (date(2026, 11, 1), date(2026, 11, 14))
+    assert bot.processor.month_range(date(2026, 1, 1), previous=True) == \
+        (date(2025, 12, 1), date(2025, 12, 31))
