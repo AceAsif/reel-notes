@@ -1501,3 +1501,110 @@ def pick_resurface(today: date | None = None, min_age_days: int = 7,
         text, kind = " ".join(s.get("Summary", [])), "summary"
     return {"path": path, "title": s["title"], "text": text, "kind": kind,
             "age_days": (today - saved).days}
+
+
+# ---- /redo: make a note again ---------------------------------------------
+
+OLD_DIR_NAME = "old"
+
+
+def note_source(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines()[:10]:
+        if line.startswith("- Source: "):
+            return line[10:].strip()
+    return ""
+
+
+def find_note_for_redo(query: str = "") -> Path | None:
+    """Newest note, or the newest whose title/file name contains the words."""
+    if not NOTES_DIR.exists():
+        return None
+    notes = sorted(NOTES_DIR.glob("*.md"), reverse=True)
+    words = [w for w in query.lower().split() if w]
+    for path in notes:
+        title = path.read_text(encoding="utf-8").split("\n", 1)[0].lower()
+        if all(w in title or w in path.name.lower() for w in words):
+            return path
+    return None
+
+
+def archive_note(path: Path) -> Path:
+    """Move an old note into NOTES_DIR/old/ (kept, but hidden from /todo, /search...)."""
+    old_dir = NOTES_DIR / OLD_DIR_NAME
+    old_dir.mkdir(exist_ok=True)
+    name = path.with_suffix(".md")
+    target = old_dir / name.name
+    if target.exists():
+        target = old_dir / f"{name.stem}_{datetime.now():%H%M%S}.md"
+    path.replace(target)
+    return target
+
+
+# ---- yt-dlp auto-update -----------------------------------------------------
+
+def ytdlp_version() -> str:
+    from importlib import metadata
+    try:
+        return metadata.version("yt-dlp")
+    except metadata.PackageNotFoundError:
+        return "not installed"
+
+
+def update_ytdlp() -> tuple[str, str, str]:
+    """pip install -U yt-dlp. Returns (old version, new version, error or '')."""
+    import sys
+    old = ytdlp_version()
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "--quiet",
+                            "--disable-pip-version-check", "yt-dlp"],
+                           capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return old, old, str(exc)
+    err = "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-300:]
+    return old, ytdlp_version(), err
+
+
+# ---- /health ----------------------------------------------------------------
+
+def health_checks() -> list[tuple[bool, str, str]]:
+    """(ok, name, detail) for everything the bot needs."""
+    import shutil
+    checks = []
+    # Ollama + model
+    try:
+        tags = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5).json()
+        names = [m.get("name", "") for m in tags.get("models", [])]
+        have = OLLAMA_MODEL in names or f"{OLLAMA_MODEL}:latest" in names
+        checks.append((True, "Ollama", "running"))
+        checks.append((have, "AI model", OLLAMA_MODEL + ("" if have else
+                       f" not downloaded. Run: ollama pull {OLLAMA_MODEL}")))
+    except (requests.RequestException, ValueError):
+        checks.append((False, "Ollama", "not running. Start the Ollama app"))
+    # Tools
+    checks.append((bool(shutil.which("ffmpeg")), "ffmpeg",
+                   "found" if shutil.which("ffmpeg") else "not found. Install it and add to PATH"))
+    try:
+        checks.append((True, "Tesseract OCR", f"v{pytesseract.get_tesseract_version()}"))
+    except Exception:
+        checks.append((False, "Tesseract OCR", "not found. Check TESSERACT_CMD in .env"))
+    checks.append((ytdlp_version() != "not installed", "yt-dlp", ytdlp_version()))
+    checks.append((True, "Whisper model", WHISPER_MODEL))
+    cookies = os.getenv("COOKIES_FILE")
+    if cookies:
+        checks.append((Path(cookies).exists(), "Cookies file",
+                       "found" if Path(cookies).exists() else "missing: " + cookies))
+    # Notes folder + disk space
+    if NOTES_DIR.exists():
+        count = len(list(NOTES_DIR.glob("*.md")))
+        try:
+            probe = NOTES_DIR / ".health_check"
+            probe.write_text("ok")
+            probe.unlink()
+            checks.append((True, "Notes folder", f"{count} notes"))
+        except OSError:
+            checks.append((False, "Notes folder", "can't write. Is Google Drive running?"))
+        free_gb = shutil.disk_usage(NOTES_DIR).free / 1e9
+        checks.append((free_gb > 2, "Free disk space", f"{free_gb:.0f} GB"))
+    else:
+        checks.append((False, "Notes folder", f"{NOTES_DIR} not found. Is Google Drive running?"))
+    return checks

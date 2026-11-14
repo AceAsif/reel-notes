@@ -30,6 +30,7 @@ import processor  # noqa: E402
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Australia/Hobart"))
+YTDLP_UPDATE_TIME = os.getenv("YTDLP_UPDATE_TIME", "03:30").strip().lower()
 MAX_BYTES = 20 * 1024 * 1024  # Telegram bots can only download files up to 20 MB
 
 
@@ -78,7 +79,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
-        "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
+        "Tags: /tags  /tag python  /renametag old new  /retag\n"
+        "Fix: /redo (make the newest note again)  /health  /update\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
@@ -197,6 +199,11 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     status = await msg.reply_text("Got the link ⏳ Downloading...")
+    await note_from_link(status, url)
+
+
+async def note_from_link(status, url: str) -> Path | None:
+    """Download + process a link, editing the status message as it goes."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
             videos, caption, creator = await asyncio.to_thread(
@@ -218,9 +225,109 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "If it's a login/cookies error, see COOKIES_FILE in .env, "
             "or send me the video file instead."
         )
-        return
+        return None
 
     await status.edit_text(format_reply(data, note_path))
+    return note_path
+
+
+# ---- /redo ------------------------------------------------------------------
+
+async def redo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/redo = make your newest note again. /redo 2 (after /notes) or /redo llm wiki."""
+    if not is_allowed(update):
+        return
+    args = " ".join(context.args or []).strip()
+    path = None
+    if args.isdigit():
+        paths = context.user_data.get("last_results", [])
+        n = int(args)
+        if 1 <= n <= len(paths):
+            path = Path(paths[n - 1])
+    else:
+        path = processor.find_note_for_redo(args)
+    if not path or not path.exists():
+        await update.message.reply_text(
+            "I couldn't find that note. Try /redo (newest note), /redo llm wiki, "
+            "or /notes then /redo 2")
+        return
+    source = processor.note_source(path)
+    if not re.search(LINK_PATTERN, source):
+        await update.message.reply_text(
+            f"“{path.name}” wasn't made from a link, so I can't download it again. "
+            "Send the video or screenshots again instead.")
+        return
+    context.user_data["redo_path"] = str(path)
+    title = path.read_text(encoding="utf-8").split("\n", 1)[0].lstrip("# ")
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Yes, redo it", callback_data="redo:yes"),
+                                     InlineKeyboardButton("Cancel", callback_data="redo:no")]])
+    await update.message.reply_text(
+        f"Make this note again with {processor.OLLAMA_MODEL}?\n\n📝 {title}\n{source}\n\n"
+        "The old note moves to the “old” folder (not deleted). "
+        "Ticked actions in it won't carry over.", reply_markup=buttons)
+
+
+async def redo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    path = Path(context.user_data.pop("redo_path", "") or ".")
+    if query.data != "redo:yes":
+        await query.edit_message_text("OK, kept the note as it is.")
+        return
+    if not path.is_file():
+        await query.edit_message_text("That note is gone. Run /redo again.")
+        return
+    url = processor.note_source(path)
+    await query.edit_message_text("🔁 Making the note again ⏳ Downloading...")
+    old = path.with_suffix(".redo")          # hide it so the duplicate check doesn't stop us
+    path.replace(old)
+    new_note = await note_from_link(query.message, url)
+    if new_note:
+        processor.archive_note(old)
+    else:
+        old.replace(path)                   # failed: put the old note back
+
+
+# ---- /health and yt-dlp updates ----------------------------------------------
+
+def health_text() -> str:
+    checks = processor.health_checks()
+    lines = [f"{'✅' if ok else '❌'} {name}: {detail}" for ok, name, detail in checks]
+    bad = sum(not ok for ok, _, _ in checks)
+    head = "🩺 All good, Boss!" if not bad else f"🩺 {bad} problem{'s' if bad > 1 else ''} found:"
+    return head + "\n\n" + "\n".join(lines)
+
+
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
+    await update.message.reply_text(await asyncio.to_thread(health_text))
+
+
+def update_text(old: str, new: str, err: str) -> str:
+    if err:
+        return f"⚠️ yt-dlp update failed ({old}):\n{err}"
+    if old == new:
+        return f"✅ yt-dlp is up to date ({new})."
+    return (f"⬆️ yt-dlp updated: {old} → {new}\n"
+            "Restart me from the tray icon (Quit, then open again) to use it.")
+
+
+async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/update = update yt-dlp now (new Instagram/Facebook changes break old versions)."""
+    if not is_allowed(update):
+        return
+    status = await update.message.reply_text("Checking for a new yt-dlp ⏳")
+    await status.edit_text(update_text(*await asyncio.to_thread(processor.update_ytdlp)))
+
+
+async def daily_ytdlp_update(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs every night. Only messages you if something changed or failed."""
+    old, new, err = await asyncio.to_thread(processor.update_ytdlp)
+    if err or old != new:
+        await context.bot.send_message(context.job.chat_id, update_text(old, new, err))
 
 
 TODO_PAGE_SIZE = 10
@@ -998,6 +1105,10 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("redo", redo))
+    app.add_handler(CallbackQueryHandler(redo_button_pressed, pattern=r"^redo:"))
+    app.add_handler(CommandHandler("health", health))
+    app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("file", send_file))
     app.add_handler(CommandHandler("ask", ask))
     app.add_handler(CommandHandler("remind", remind))
@@ -1044,6 +1155,15 @@ def build_app() -> Application:
         # 1st of every month, 9:30 am: summary of the previous month
         app.job_queue.run_monthly(monthly_summary, when=datetime.time(9, 30, tzinfo=TIMEZONE),
                                   day=1, chat_id=int(ALLOWED_USER_ID))
+        # Every night at YTDLP_UPDATE_TIME (default 03:30): keep yt-dlp fresh
+        if YTDLP_UPDATE_TIME != "off":
+            try:
+                hour, minute = (int(x) for x in YTDLP_UPDATE_TIME.split(":"))
+                app.job_queue.run_daily(daily_ytdlp_update,
+                                        time=datetime.time(hour, minute, tzinfo=TIMEZONE),
+                                        chat_id=int(ALLOWED_USER_ID))
+            except ValueError:
+                print(f"YTDLP_UPDATE_TIME={YTDLP_UPDATE_TIME!r} isn't HH:MM, auto-update disabled")
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))

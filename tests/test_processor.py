@@ -576,3 +576,34 @@ def test_thinking_off_only_for_qwen3(monkeypatch):
     monkeypatch.setattr(p, "OLLAMA_MODEL", "qwen2.5:7b")
     assert p.ollama_extra() == {}
     assert p.strip_thinking("<think>hmm</think>{\"a\":1}") == '{"a":1}'
+
+
+def test_find_note_for_redo_and_archive(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    (tmp_path / "2026-11-14_2106_llm-wiki.md").write_text("# LLM Wiki\n- Source: https://www.instagram.com/reel/A/\n", encoding="utf-8")
+    (tmp_path / "2026-11-15_0040_ai-job.md").write_text("# AI Job Market\n- Source: screenshot\n", encoding="utf-8")
+    assert p.find_note_for_redo().name.endswith("ai-job.md")          # newest
+    note = p.find_note_for_redo("llm wiki")
+    assert p.note_source(note) == "https://www.instagram.com/reel/A/"
+    assert p.find_note_for_redo("nothing here") is None
+    hidden = note.with_suffix(".redo")
+    note.replace(hidden)
+    moved = p.archive_note(hidden)
+    assert moved == tmp_path / "old" / "2026-11-14_2106_llm-wiki.md" and moved.exists()
+    assert len(list(tmp_path.glob("*.md"))) == 1                         # hidden from /todo etc.
+
+
+def test_update_ytdlp(monkeypatch):
+    versions = iter(["2026.10.1", "2026.11.9"])
+    monkeypatch.setattr(p, "ytdlp_version", lambda: next(versions))
+    monkeypatch.setattr(p.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    assert p.update_ytdlp() == ("2026.10.1", "2026.11.9", "")
+
+
+def test_health_checks_when_everything_is_off(tmp_path, monkeypatch):
+    def down(*a, **k): raise p.requests.ConnectionError()
+    monkeypatch.setattr(p.requests, "get", down)
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path / "missing")
+    checks = {name: ok for ok, name, _ in p.health_checks()}
+    assert checks["Ollama"] is False and checks["Notes folder"] is False

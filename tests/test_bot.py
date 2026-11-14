@@ -229,3 +229,57 @@ def test_album_makes_one_note(monkeypatch):
     monkeypatch.setattr(bot, "format_reply", lambda d, p: "saved")
     asyncio.run(bot.process_screenshots([FakeShot("my notes"), FakeShot()]))
     assert calls == [(2, "screenshot", "my notes")]
+
+
+@pytest.mark.parametrize("text,handler", [("/redo", "redo"), ("/health", "health"),
+                                          ("/update", "update_cmd")])
+def test_new_commands_route(text, handler):
+    assert first_matching_handler(text) == handler
+
+
+def test_update_text():
+    assert "up to date" in bot.update_text("1", "1", "")
+    assert "→ 2" in bot.update_text("1", "2", "") and "Restart" in bot.update_text("1", "2", "")
+    assert "failed" in bot.update_text("1", "1", "no network")
+
+
+def test_health_text(monkeypatch):
+    monkeypatch.setattr(bot.processor, "health_checks",
+                        lambda: [(True, "Ollama", "running"), (False, "ffmpeg", "not found")])
+    text = bot.health_text()
+    assert "1 problem found" in text and "❌ ffmpeg: not found" in text
+
+
+def run_redo_button(tmp_path, monkeypatch, answer, works):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    note = tmp_path / "2026-11-14_2106_x.md"
+    note.write_text("# X\n- Source: https://www.instagram.com/reel/A/\n", encoding="utf-8")
+    async def fake_link(status, url):
+        if works:
+            (tmp_path / "2026-11-15_0100_x.md").write_text("# X new", encoding="utf-8")
+            return tmp_path / "2026-11-15_0100_x.md"
+    monkeypatch.setattr(bot, "note_from_link", fake_link)
+    edits = []
+    async def edit(t): edits.append(t)
+    async def ok(): pass
+    query = types.SimpleNamespace(data=answer, answer=ok, edit_message_text=edit, message=None)
+    upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
+    ctx = types.SimpleNamespace(user_data={"redo_path": str(note)})
+    asyncio.run(bot.redo_button_pressed(upd, ctx))
+    return note, edits
+
+
+def test_redo_success_archives_old(tmp_path, monkeypatch):
+    note, _ = run_redo_button(tmp_path, monkeypatch, "redo:yes", True)
+    assert not note.exists() and (tmp_path / "old" / note.name).exists()
+
+
+def test_redo_failure_restores_old(tmp_path, monkeypatch):
+    note, _ = run_redo_button(tmp_path, monkeypatch, "redo:yes", False)
+    assert note.exists() and not (tmp_path / "old").exists()
+
+
+def test_redo_cancel(tmp_path, monkeypatch):
+    note, edits = run_redo_button(tmp_path, monkeypatch, "redo:no", True)
+    assert note.exists() and "kept" in edits[0]

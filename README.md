@@ -105,6 +105,12 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
   - ⚠️ there were **no updates for over a year**
   - ⚠️ the repo was **not found** (the link may be wrong)
 
+## Fixing and checking the bot
+
+- `/redo` makes your newest note again (e.g. after changing the AI model). `/redo llm wiki` picks a note by its title; `/notes` then `/redo 2` works too. The bot asks first. The old note moves to an `old` folder inside your notes folder, so nothing is lost.
+- `/health` checks everything the bot needs: Ollama and the model, ffmpeg, Tesseract, yt-dlp, the notes folder (Google Drive) and free disk space.
+- yt-dlp updates itself every night at 03:30 (`YTDLP_UPDATE_TIME` in `.env`, or `off`). You only get a message if it updated or failed. `/update` does it now. After an update, restart the bot from the tray icon.
+
 ## Notes on your phone
 
 **Easiest:** use the bot itself. `/notes` then `/note 3` shows a note nicely in Telegram.
