@@ -534,3 +534,19 @@ def test_resource_line_shows_health():
     line = p.resource_line({"name": "B", "link": "https://github.com/a/b", "stars": 10,
                                     "updated": "2020-01-01", "license": "MIT", "archived": True}, "tech")
     assert "updated Jan 2020" in line and "MIT" in line and "archived" in line
+
+
+def test_no_github_search_when_video_is_not_about_code(monkeypatch):
+    called = []
+    monkeypatch.setattr(p, "find_repo", lambda n, s: called.append(n) or {"link": "x", "stars": 9})
+    text = "Go to settings and search for DNS. Muse from Meta, Grokbot from X."
+    res = p.enrich_with_github([{"name": "Settings"}, {"name": "Muse"}], "tech", text)
+    assert called == []
+    assert "google.com/search" in p.resource_line(res[0], "tech")
+
+
+def test_github_search_when_video_mentions_open_source(monkeypatch):
+    monkeypatch.setattr(p, "find_repo", lambda n, s: {"link": "https://github.com/nashsu/llm_wiki", "stars": 9})
+    text = "LLM Wiki is an open source desktop app on GitHub"
+    res = p.enrich_with_github([{"name": "LLM Wiki"}, {"name": "Other"}], "tech", text)
+    assert res[0]["link"].endswith("llm_wiki")
