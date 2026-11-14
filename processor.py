@@ -194,9 +194,14 @@ def clean_actions(items) -> list[dict]:
     return result
 
 
+# Actions/points that only send you to the creator: "comment 'MEMORY' to get the link",
+# "DM me", "link in bio", "follow the creator", "check my broadcast channel"...
 LOW_PRIORITY_RE = re.compile(
-    r"\b(bio|dm|dms|comment \"?\w+\"? (below|to)|follow (the |this )?(creator|author|account|page)|"
-    r"broadcast channel|telegram channel|(creator|author)'?s? (channel|page|profile)|link in)\b",
+    # "comment 'MEMORY'" / "comment CLAUDE" / "comment below" (not "add a comment to your code")
+    r"\bcomment\s+(?:[\"'“”‘’][\w-]+[\"'“”‘’]|(?-i:[A-Z][A-Z0-9]+)\b|below\b)"
+    r"|\b(?:bio|dm|dms|follow (?:the |this )?(?:creator|author|account|page)|follow (?:me|for more)|"
+    r"broadcast channel|telegram channel|(?:creator|author)'?s? (?:channel|page|profile)|"
+    r"link in|in the caption|in my (?:profile|page))\b",
     re.I)
 
 
@@ -222,6 +227,26 @@ def split_priority(text: str) -> tuple[str, str]:
         if icon and text.startswith(icon):
             return level, text[len(icon):]
     return "normal", text
+
+
+def creator_offers(texts: list[str]) -> list[str]:
+    """The 'comment X / DM me / link in bio' parts: how the creator gives out links."""
+    return [t for t in texts if LOW_PRIORITY_RE.search(t)]
+
+
+def creator_offer_lines(data: dict) -> list[str]:
+    """'## From the creator': who made it and how they offer the links, as a backup
+    if a link in this note is wrong or missing."""
+    offers = creator_offers([a["text"] for a in data.get("action_items", [])]
+                            + list(data.get("key_points", [])))
+    if not offers:
+        return []
+    lines = ["## From the creator"]
+    if data.get("creator"):
+        lines.append(f"- Creator: {data['creator']}")
+    lines += [f"- Offer: {o}" for o in dict.fromkeys(offers)]
+    lines.append("- Use this if a link in this note is wrong or missing.")
+    return lines + [""]
 
 
 def claims_lines(data: dict) -> list[str]:
@@ -305,32 +330,49 @@ def squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def github_get(path: str, params: dict | None = None) -> dict | None:
-    """Call the GitHub API. Returns None on any problem, so notes never fail."""
+def github_request(path: str, params: dict | None = None) -> tuple[int, dict | None]:
+    """Call the GitHub API: (HTTP status, JSON). Status 0 = network problem."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "reel-notes-bot"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
     try:
         r = requests.get("https://api.github.com" + path, params=params,
                          headers=headers, timeout=10)
-        return r.json() if r.status_code == 200 else None
+        return r.status_code, (r.json() if r.status_code == 200 else None)
     except (requests.RequestException, ValueError):
-        return None
+        return 0, None
+
+
+def github_get(path: str, params: dict | None = None) -> dict | None:
+    """Call the GitHub API. Returns None on any problem, so notes never fail."""
+    return github_request(path, params)[1]
+
+
+def repo_fields(d: dict) -> dict:
+    """What we keep about a repo: link, stars, description, last update, archived, licence."""
+    licence = (d.get("license") or {}).get("spdx_id") or ""
+    return {"link": d["html_url"], "stars": d.get("stargazers_count", 0),
+            "description": (d.get("description") or "").strip(),
+            "updated": (d.get("pushed_at") or "")[:10],
+            "archived": bool(d.get("archived")),
+            "license": "" if licence == "NOASSERTION" else licence}
 
 
 def repo_info(owner: str, name: str) -> dict | None:
-    """Real link, stars and description for owner/name."""
+    """Repo details for owner/name. {'missing': True} if GitHub says it doesn't exist
+    (wrong link), None if GitHub couldn't be asked (offline, rate limit)."""
     name = name.removesuffix(".git")
-    d = github_get(f"/repos/{owner}/{name}")
-    if not d or "html_url" not in d:
-        # Fallback: the same repo through the search API
-        found = github_get("/search/repositories", {"q": f"repo:{owner}/{name}"})
-        items = (found or {}).get("items", [])
-        if not items:
-            return None
-        d = items[0]
-    return {"link": d["html_url"], "stars": d.get("stargazers_count", 0),
-            "description": (d.get("description") or "").strip()}
+    status, d = github_request(f"/repos/{owner}/{name}")
+    if status == 200 and d and "html_url" in d:
+        return repo_fields(d)
+    if status == 404:
+        return {"missing": True}
+    # Fallback: the same repo through the search API (422 = no such repo)
+    status, found = github_request("/search/repositories", {"q": f"repo:{owner}/{name}"})
+    if status == 422:
+        return {"missing": True}
+    items = (found or {}).get("items", [])
+    return repo_fields(items[0]) if items else None
 
 
 def find_repo(name: str, source_text: str) -> dict | None:
@@ -346,14 +388,14 @@ def find_repo(name: str, source_text: str) -> dict | None:
         names = [squash(repo)] + [squash(s) for s in re.findall(r"--skill\s+([\w-]+)", skills)]
         if any(len(n) >= 3 and (key == n or key in n or n in key) for n in names):
             info = repo_info(owner, repo)
-            if info:
+            if info and not info.get("missing"):
                 return info
     # 2) A github.com/owner/repo link shown in the video or written in the caption
     for owner, repo in GITHUB_REPO_RE.findall(joined):
         r = squash(repo.removesuffix(".git"))
         if len(r) >= 3 and (key in r or r in key):
             info = repo_info(owner, repo)
-            if info:
+            if info and not info.get("missing"):
                 return info
     # 3) GitHub search: the repo name must match the tool name exactly, AND have at
     #    least MIN_SEARCH_STARS stars, so a tiny unrelated repo with the same name
@@ -363,8 +405,7 @@ def find_repo(name: str, source_text: str) -> dict | None:
     for item in (found or {}).get("items", []):
         if (squash(item.get("name", "")) == key
                 and item.get("stargazers_count", 0) >= MIN_SEARCH_STARS):
-            return {"link": item["html_url"], "stars": item.get("stargazers_count", 0),
-                    "description": (item.get("description") or "").strip()}
+            return repo_fields(item)
     return None
 
 
@@ -381,9 +422,32 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
             info = find_repo(str(r.get("name", "")), source_text)
         else:
             info = None
-        if info:
+        if info and info.get("missing"):
+            r["missing"] = True                 # keep the link, but warn it may be wrong
+        elif info:
             r.update(info)
     return resources
+
+
+STALE_DAYS = 365
+
+
+def repo_warnings(r: dict, today: date | None = None) -> list[str]:
+    """Health warnings for a repo resource."""
+    if r.get("missing"):
+        return ["⚠️ repo not found: this link may be wrong"]
+    warnings = []
+    if r.get("archived"):
+        warnings.append("⚠️ archived: no longer maintained")
+    updated = r.get("updated", "")
+    if updated:
+        try:
+            last = date.fromisoformat(updated)
+            if ((today or date.today()) - last).days > STALE_DAYS:
+                warnings.append(f"⚠️ no updates for over a year (last: {last:%b %Y})")
+        except ValueError:
+            pass
+    return warnings
 
 
 def format_stars(n: int) -> str:
@@ -421,6 +485,16 @@ def resource_line(r, category: str = "") -> str:
     line = f"{name} {link}".strip()
     if "stars" in r:
         line += f"  ⭐ {format_stars(int(r['stars']))}"
+        extra = []
+        if r.get("updated"):
+            extra.append(f"updated {date.fromisoformat(r['updated']):%b %Y}")
+        if "license" in r:
+            extra.append(r["license"] or "no licence")
+        if extra:
+            line += " · " + " · ".join(extra)
+    warnings = repo_warnings(r)
+    if warnings:
+        line += "  " + "  ".join(warnings)
     if r.get("description"):
         desc = r["description"]
         line += " — " + (desc if len(desc) <= 100 else desc[:97] + "...")
@@ -443,6 +517,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         f"- Date: {now:%Y-%m-%d %H:%M}",
         f"- Category: {data['category']}",
         f"- Source: {source or '-'}",
+        *([f"- Creator: {data['creator']}"] if data.get("creator") else []),
         f"- Language: {language}" + (" (translated to English)" if language != "en" else ""),
         *([f"- Slides: {slide_summary(data)}"] if slide_total(data) > 1 else []),
         tags_line(data.get("tags", [])),
@@ -452,6 +527,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         "",
         *motivation_lines(data),
         *claims_lines(data),
+        *creator_offer_lines(data),
         "## Key points",
         *[f"- {p}" for p in data["key_points"]],
         "",
@@ -488,11 +564,11 @@ def slide_position(p: Path) -> int:
     return int(n) if n.isdigit() else 0
 
 
-def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
+def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     """Download a reel, or every slide of a carousel post (videos AND photos).
 
-    Returns (slide files in post order, the post caption). For a video slide you
-    get the video; for a photo slide you get the image.
+    Returns (slide files in post order, the post caption, the creator). For a video
+    slide you get the video; for a photo slide you get the image.
     """
     import yt_dlp
 
@@ -527,7 +603,32 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str]:
             if entry and entry.get("description"):
                 caption = entry["description"]
                 break
-    return pick_slides(workdir), caption.strip()
+    return pick_slides(workdir), caption.strip(), creator_from_info(info)
+
+
+def creator_from_info(info: dict) -> dict:
+    """Who posted it: {'name', 'handle', 'url'} from yt-dlp's details (any may be '')."""
+    entries = [e for e in (info.get("entries") or []) if e]
+    src = info if (info.get("uploader") or info.get("channel")) else (entries[0] if entries else info)
+    name = str(src.get("uploader") or src.get("channel") or "").strip()
+    handle = str(src.get("uploader_id") or src.get("channel_id") or "").strip().lstrip("@")
+    url = str(src.get("uploader_url") or src.get("channel_url") or "").strip()
+    if handle.isdigit():                     # Instagram sometimes gives a number, not a name
+        handle = ""
+    return {"name": name, "handle": handle, "url": url}
+
+
+def creator_line(creator: dict | None) -> str:
+    """'Akita (@akitaonrails) https://...' or '' if unknown."""
+    if not creator:
+        return ""
+    name, handle, url = creator.get("name", ""), creator.get("handle", ""), creator.get("url", "")
+    parts = [name] if name else []
+    if handle and handle.lower() != name.lower():
+        parts.append(f"(@{handle})" if name else f"@{handle}")
+    if url:
+        parts.append(url)
+    return " ".join(parts)
 
 
 def pick_slides(workdir: Path) -> list[Path]:
@@ -579,7 +680,8 @@ def image_text(image: Path, workdir: Path) -> str:
         return ocr_lines([png])
 
 
-def process_videos(videos: list[Path], source: str = "", caption: str = "") -> tuple[Path, dict]:
+def process_videos(videos: list[Path], source: str = "", caption: str = "",
+                   creator: dict | None = None) -> tuple[Path, dict]:
     """Full pipeline for one reel or a multi-slide post (videos and/or photos) → ONE note."""
     labels, transcripts, screens, languages = [], [], [], []
     photo_count = 0
@@ -619,6 +721,7 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "") -> t
     data["language"] = language
     data["video_count"] = len(transcripts) - photo_count
     data["photo_count"] = photo_count
+    data["creator"] = creator_line(creator)
     return save_note(data, transcript, screen, source, language, caption), data
 
 
@@ -1252,7 +1355,7 @@ def note_sections(path: Path) -> dict:
             current = line[3:].strip()
             sections[current] = []
         elif current is None:
-            m = re.match(r"- (Category|Source): (.*)", line)
+            m = re.match(r"- (Category|Source|Creator): (.*)", line)
             if m:
                 sections[m.group(1).lower()] = m.group(2).strip()
         elif line.strip():
@@ -1275,10 +1378,16 @@ def make_plan(path: Path, my_goal: str = "") -> str:
     open_actions = [re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line) for line in
                     s.get("Action items", []) + s.get("Habit to try", [])
                     if line.startswith("- [ ] ")]
-    # "Check my bio / DM me / comment X" actions are for the creator, not for Claude
+    # "Comment X / DM me / link in bio" are ways to reach the creator: Claude can't do
+    # them, so they go into a separate "backup" part instead of the actions.
+    all_points = [line.lstrip("- ") for line in s.get("Key points", [])]
+    offers = list(dict.fromkeys(
+        [line[len("- Offer: "):] for line in s.get("From the creator", [])
+         if line.startswith("- Offer: ")]
+        + creator_offers(open_actions + all_points)))
     open_actions = [a for a in open_actions if not LOW_PRIORITY_RE.search(a)]
     summary = " ".join(s.get("Summary", []))
-    key_points = [line.lstrip("- ") for line in s.get("Key points", [])][:7]
+    key_points = [k for k in all_points if not LOW_PRIORITY_RE.search(k)][:7]
     resources = [line.lstrip("- ") for line in s.get("Resources", [])][:8]
     claims = [line.lstrip("- ").replace("⚠️ ", "") for line in s.get("Claims to check", [])]
 
@@ -1310,6 +1419,12 @@ def make_plan(path: Path, my_goal: str = "") -> str:
             "- A step-by-step plan: for each step, what to do, why, and how long it takes.",
             "- Exact commands or settings where needed.",
             "- A short checklist at the end that I can tick off."]
+    if offers or s.get("creator"):
+        out += ["", "Backup if a link above is wrong, missing or dead:"]
+        if s.get("creator"):
+            out.append(f"- The video's creator: {s['creator']}")
+        out += [f"- The creator offered: {o}" for o in offers]
+        out.append("- Tell me if I should ask the creator for the correct link.")
     if s.get("source"):
         out += ["", f"(Source video: {s['source']})"]
     return "\n".join(out)

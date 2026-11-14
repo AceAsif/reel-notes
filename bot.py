@@ -143,7 +143,8 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     status = await msg.reply_text("Got the link ⏳ Downloading...")
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            videos, caption = await asyncio.to_thread(processor.download_media, url, Path(tmp))
+            videos, caption, creator = await asyncio.to_thread(
+                processor.download_media, url, Path(tmp))
             if len(videos) > 1:
                 photos = sum(v.suffix.lower() in processor.IMAGE_EXTS for v in videos)
                 kinds = processor.slide_summary(
@@ -154,7 +155,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             else:
                 await status.edit_text("Downloaded ⏳ Processing...")
             note_path, data = await asyncio.to_thread(
-                processor.process_videos, videos, url, caption)
+                processor.process_videos, videos, url, caption, creator)
     except Exception as exc:
         await status.edit_text(
             f"❌ Something went wrong: {exc}\n\n"

@@ -422,7 +422,9 @@ def test_make_plan_without_actions(notes):
 def test_make_plan_skips_creator_promo_actions(notes):
     path = make_note(actions=["Check the broadcast channel from the bio", "Read the README"])
     plan = p.make_plan(path)
-    assert "1. Read the README" in plan and "broadcast channel" not in plan
+    instructions = plan.split("Backup if a link")[0]
+    assert "1. Read the README" in instructions and "broadcast channel" not in instructions
+    assert "The creator offered: Check the broadcast channel from the bio" in plan
 
 
 # ---- resurface --------------------------------------------------------------------
@@ -445,3 +447,90 @@ def test_resurface_none_when_all_new(notes):
     from datetime import date
     (notes / "2026-11-13_1200_new.md").write_text("# New\n", encoding="utf-8")
     assert p.pick_resurface(date(2026, 11, 14)) is None
+
+
+# ---- creator info and offers ------------------------------------------------------
+
+@pytest.mark.parametrize("text,is_promo", [
+    ("Comment 'MEMORY' to receive the GitHub repo", True),
+    ('Comment "CLAUDE" below', True),
+    ("Comment “PROCESS” to get the premium skills", True),
+    ("Follow for more AI tools", True),
+    ("Follow me for daily tips", True),
+    ("Grab the link in bio", True),
+    ("Follow the instructions to install the model", False),
+    ("Add a comment to your code", False),
+    ("Visit the GitHub repo and explore the README", False),
+])
+def test_promo_filter(text, is_promo):
+    assert bool(p.LOW_PRIORITY_RE.search(text)) is is_promo
+
+
+def test_creator_from_info():
+    info = {"entries": [None, {"uploader": "Akita", "uploader_id": "akitaonrails",
+                               "uploader_url": "https://www.instagram.com/akitaonrails"}]}
+    c = p.creator_from_info(info)
+    assert p.creator_line(c) == "Akita (@akitaonrails) https://www.instagram.com/akitaonrails"
+    assert p.creator_line({"name": "", "handle": "123456", "url": ""}) == "@123456"
+    assert p.creator_line(p.creator_from_info({"uploader_id": "98765"})) == ""
+    assert p.creator_line(None) == ""
+
+
+def test_note_has_creator_and_offer_section(notes):
+    path = make_note(actions=["Visit the GitHub repo", "Comment 'MEMORY' to receive the repo"],
+                     creator="Akita (@akitaonrails)",
+                     key_points=["Memory is stored as Markdown", "Follow the creator for more"])
+    text = path.read_text(encoding="utf-8")
+    assert "- Creator: Akita (@akitaonrails)" in text.split("## Summary")[0]
+    offer = text.split("## From the creator")[1].split("## Key points")[0]
+    assert "- Offer: Comment 'MEMORY' to receive the repo" in offer
+    assert "- Offer: Follow the creator for more" in offer
+    # still a (low priority) action, nothing deleted:
+    assert "- [ ] 🔽 Comment 'MEMORY' to receive the repo" in text
+    assert p.find_note_by_source("https://x/1") == path      # duplicate check unaffected
+
+
+def test_plan_moves_creator_offers_to_backup(notes):
+    path = make_note(actions=["Visit the GitHub repo", "Comment 'MEMORY' to receive the repo"],
+                     creator="Akita (@akitaonrails)",
+                     key_points=["Memory is stored as Markdown", "Follow the creator for more"])
+    plan = p.make_plan(path)
+    instructions, backup = plan.split("Backup if a link above is wrong")
+    assert "1. Visit the GitHub repo" in instructions and "MEMORY" not in instructions
+    assert "Follow the creator" not in instructions and "Memory is stored as Markdown" in instructions
+    assert "The video's creator: Akita (@akitaonrails)" in backup
+    assert "The creator offered: Comment 'MEMORY' to receive the repo" in backup
+    assert backup.count("Comment 'MEMORY'") == 1          # not listed twice
+
+
+def test_repo_info_missing(monkeypatch):
+    monkeypatch.setattr(p, "github_request", lambda p, params=None: (404, None))
+    assert p.repo_info("a", "b") == {"missing": True}
+
+
+def test_repo_info_rate_limit_is_not_missing(monkeypatch):
+    monkeypatch.setattr(p, "github_request", lambda p, params=None: (403, None))
+    assert p.repo_info("a", "b") is None
+
+
+def test_repo_info_fields(monkeypatch):
+    d = {"html_url": "https://github.com/a/b", "stargazers_count": 5, "description": "x",
+         "pushed_at": "2024-03-02T00:00:00Z", "archived": True, "license": {"spdx_id": "MIT"}}
+    monkeypatch.setattr(p, "github_request", lambda p, params=None: (200, d))
+    info = p.repo_info("a", "b")
+    assert info["updated"] == "2024-03-02" and info["archived"] and info["license"] == "MIT"
+
+
+def test_repo_warnings():
+    from datetime import date
+    r = {"archived": True, "updated": "2024-03-02"}
+    w = p.repo_warnings(r, today=date(2026, 1, 1))
+    assert any("archived" in x for x in w) and any("Mar 2024" in x for x in w)
+    assert p.repo_warnings({"missing": True})[0].startswith("⚠️ repo not found")
+    assert p.repo_warnings({"updated": "2025-12-01"}, today=date(2026, 1, 1)) == []
+
+
+def test_resource_line_shows_health():
+    line = p.resource_line({"name": "B", "link": "https://github.com/a/b", "stars": 10,
+                                    "updated": "2020-01-01", "license": "MIT", "archived": True}, "tech")
+    assert "updated Jan 2020" in line and "MIT" in line and "archived" in line
