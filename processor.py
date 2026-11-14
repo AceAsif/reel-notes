@@ -409,8 +409,22 @@ def find_repo(name: str, source_text: str) -> dict | None:
     return None
 
 
+# Words that show the video is really about code you can download
+CODE_HINT_RE = re.compile(
+    r"github|open[\s-]?source|\brepo(?:sitory)?\b|\bnpx\b|\bnpm\b|pip install|"
+    r"git clone|brew install|\blibrary\b|\bframework\b|\bcli\b|\bsdk\b", re.I)
+
+
+def mentions_code(source_text: str) -> bool:
+    return bool(CODE_HINT_RE.search(source_text or ""))
+
+
 def enrich_with_github(resources: list, category: str, source_text: str) -> list:
-    """Add real GitHub links, stars and descriptions to resources."""
+    """Add real GitHub links, stars and descriptions to resources.
+    A GitHub search only runs when the video/caption talks about code (GitHub,
+    open source, install commands...). Otherwise common names like "Settings"
+    or "Muse" would match a random popular repo."""
+    code = mentions_code(source_text)
     for r in resources:
         if not isinstance(r, dict):
             continue
@@ -418,7 +432,8 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
         m = GITHUB_REPO_RE.search(link)
         if m:                                   # already a repo link: check it's real
             info = repo_info(m.group(1), m.group(2))
-        elif not link and category in ("tech", "programming"):
+        elif not link and category in ("tech", "programming") and code:
+            r["search"] = "github"              # fallback link: GitHub search
             info = find_repo(str(r.get("name", "")), source_text)
         else:
             info = None
@@ -472,13 +487,13 @@ def drop_invented_links(resources: list, source_text: str) -> list:
 
 def resource_line(r, category: str = "") -> str:
     """Name + link. If there's no real URL, add a search link:
-    GitHub for tech/programming reels, Google for everything else."""
+    GitHub when the video talks about code, Google for everything else."""
     if not isinstance(r, dict):
         return str(r)
     name = str(r.get("name", "")).strip()
     link = str(r.get("link", "")).strip()
     if not link.lower().startswith("http"):
-        if category in ("tech", "programming"):
+        if r.get("search") == "github":
             link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
         else:
             link = "https://www.google.com/search?q=" + quote_plus(name)
