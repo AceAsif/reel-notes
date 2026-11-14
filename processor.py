@@ -330,32 +330,49 @@ def squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def github_get(path: str, params: dict | None = None) -> dict | None:
-    """Call the GitHub API. Returns None on any problem, so notes never fail."""
+def github_request(path: str, params: dict | None = None) -> tuple[int, dict | None]:
+    """Call the GitHub API: (HTTP status, JSON). Status 0 = network problem."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "reel-notes-bot"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
     try:
         r = requests.get("https://api.github.com" + path, params=params,
                          headers=headers, timeout=10)
-        return r.json() if r.status_code == 200 else None
+        return r.status_code, (r.json() if r.status_code == 200 else None)
     except (requests.RequestException, ValueError):
-        return None
+        return 0, None
+
+
+def github_get(path: str, params: dict | None = None) -> dict | None:
+    """Call the GitHub API. Returns None on any problem, so notes never fail."""
+    return github_request(path, params)[1]
+
+
+def repo_fields(d: dict) -> dict:
+    """What we keep about a repo: link, stars, description, last update, archived, licence."""
+    licence = (d.get("license") or {}).get("spdx_id") or ""
+    return {"link": d["html_url"], "stars": d.get("stargazers_count", 0),
+            "description": (d.get("description") or "").strip(),
+            "updated": (d.get("pushed_at") or "")[:10],
+            "archived": bool(d.get("archived")),
+            "license": "" if licence == "NOASSERTION" else licence}
 
 
 def repo_info(owner: str, name: str) -> dict | None:
-    """Real link, stars and description for owner/name."""
+    """Repo details for owner/name. {'missing': True} if GitHub says it doesn't exist
+    (wrong link), None if GitHub couldn't be asked (offline, rate limit)."""
     name = name.removesuffix(".git")
-    d = github_get(f"/repos/{owner}/{name}")
-    if not d or "html_url" not in d:
-        # Fallback: the same repo through the search API
-        found = github_get("/search/repositories", {"q": f"repo:{owner}/{name}"})
-        items = (found or {}).get("items", [])
-        if not items:
-            return None
-        d = items[0]
-    return {"link": d["html_url"], "stars": d.get("stargazers_count", 0),
-            "description": (d.get("description") or "").strip()}
+    status, d = github_request(f"/repos/{owner}/{name}")
+    if status == 200 and d and "html_url" in d:
+        return repo_fields(d)
+    if status == 404:
+        return {"missing": True}
+    # Fallback: the same repo through the search API (422 = no such repo)
+    status, found = github_request("/search/repositories", {"q": f"repo:{owner}/{name}"})
+    if status == 422:
+        return {"missing": True}
+    items = (found or {}).get("items", [])
+    return repo_fields(items[0]) if items else None
 
 
 def find_repo(name: str, source_text: str) -> dict | None:
@@ -371,14 +388,14 @@ def find_repo(name: str, source_text: str) -> dict | None:
         names = [squash(repo)] + [squash(s) for s in re.findall(r"--skill\s+([\w-]+)", skills)]
         if any(len(n) >= 3 and (key == n or key in n or n in key) for n in names):
             info = repo_info(owner, repo)
-            if info:
+            if info and not info.get("missing"):
                 return info
     # 2) A github.com/owner/repo link shown in the video or written in the caption
     for owner, repo in GITHUB_REPO_RE.findall(joined):
         r = squash(repo.removesuffix(".git"))
         if len(r) >= 3 and (key in r or r in key):
             info = repo_info(owner, repo)
-            if info:
+            if info and not info.get("missing"):
                 return info
     # 3) GitHub search: the repo name must match the tool name exactly, AND have at
     #    least MIN_SEARCH_STARS stars, so a tiny unrelated repo with the same name
@@ -388,8 +405,7 @@ def find_repo(name: str, source_text: str) -> dict | None:
     for item in (found or {}).get("items", []):
         if (squash(item.get("name", "")) == key
                 and item.get("stargazers_count", 0) >= MIN_SEARCH_STARS):
-            return {"link": item["html_url"], "stars": item.get("stargazers_count", 0),
-                    "description": (item.get("description") or "").strip()}
+            return repo_fields(item)
     return None
 
 
@@ -406,9 +422,32 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
             info = find_repo(str(r.get("name", "")), source_text)
         else:
             info = None
-        if info:
+        if info and info.get("missing"):
+            r["missing"] = True                 # keep the link, but warn it may be wrong
+        elif info:
             r.update(info)
     return resources
+
+
+STALE_DAYS = 365
+
+
+def repo_warnings(r: dict, today: date | None = None) -> list[str]:
+    """Health warnings for a repo resource."""
+    if r.get("missing"):
+        return ["⚠️ repo not found: this link may be wrong"]
+    warnings = []
+    if r.get("archived"):
+        warnings.append("⚠️ archived: no longer maintained")
+    updated = r.get("updated", "")
+    if updated:
+        try:
+            last = date.fromisoformat(updated)
+            if ((today or date.today()) - last).days > STALE_DAYS:
+                warnings.append(f"⚠️ no updates for over a year (last: {last:%b %Y})")
+        except ValueError:
+            pass
+    return warnings
 
 
 def format_stars(n: int) -> str:
@@ -446,6 +485,16 @@ def resource_line(r, category: str = "") -> str:
     line = f"{name} {link}".strip()
     if "stars" in r:
         line += f"  ⭐ {format_stars(int(r['stars']))}"
+        extra = []
+        if r.get("updated"):
+            extra.append(f"updated {date.fromisoformat(r['updated']):%b %Y}")
+        if "license" in r:
+            extra.append(r["license"] or "no licence")
+        if extra:
+            line += " · " + " · ".join(extra)
+    warnings = repo_warnings(r)
+    if warnings:
+        line += "  " + "  ".join(warnings)
     if r.get("description"):
         desc = r["description"]
         line += " — " + (desc if len(desc) <= 100 else desc[:97] + "...")

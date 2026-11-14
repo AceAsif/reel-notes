@@ -89,6 +89,15 @@ Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI 
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
 
+## Creator info and link checks
+
+- Every note has a **Creator** line (name, @handle and profile link) when the site gives it.
+- A **From the creator** section keeps the creator's own offers ("comment X", "link in bio", "DM me"). Use it if a link in the note is wrong or missing. These offers also stay as low-priority actions, and `/plan` lists them as a backup.
+- For every GitHub link the bot shows stars, last update and licence, e.g. `⭐ 1.2k · updated Mar 2025 · MIT`. It warns you when:
+  - ⚠️ the repo is **archived** (no longer maintained)
+  - ⚠️ there were **no updates for over a year**
+  - ⚠️ the repo was **not found** (the link may be wrong)
+
 ## Notes on your phone
 
 **Easiest:** use the bot itself. `/notes` then `/note 3` shows a note nicely in Telegram.
