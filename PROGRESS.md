@@ -1,30 +1,27 @@
-# Progress - Chat mode (talk to the bot about your notes)
-Branch: feature/chat-mode
-Last updated: 2026-11-14 00:20 (Hobart)
+# Progress - Small improvements + /plan
+Branch: feature/small-improvements
+Last updated: 2026-11-14 13:40 (Hobart)
 
 ## Plan
-1. chat_reply(): find matching notes (this + previous message), friendly system prompt, recent history, local Ollama /api/chat
-2. Bot: normal text messages go to chat mode (links still make notes), "typing..." indicator, sources list, /newchat to forget the conversation
-3. README, help text, BotFather list
+1. Chat fixes: follow-ups reuse the previous notes; no invented steps; mention unverified claims
+2. /todo in pages (10 per page, Prev/Next buttons) + /todo high|normal|low filter
+3. /plan N: turn a note into a ready-to-paste Claude prompt (ART format)
+4. Resurface an old note once a week
+5. Monthly learning summary (1st of each month) + /month
+6. README, help text, BotFather list
 
 ## Done
-- Step 1: chat_reply() with relevant_notes() (shared with /ask), friendly "Reel Notes" system prompt that only uses facts from the notes, last 6 back-and-forth turns, Markdown cleanup (4 new tests)
-
-- Step 2: Normal text messages go to chat mode (links still make notes, /commands unchanged); typing indicator; sources listed under the reply and usable with /note; friendly message if Ollama is off; /newchat; main() split into build_app() + main() so routing can be tested (8 new tests)
-
-- Step 3: README (chat mode, /newchat)
+- Step 1: is_follow_up() so "which one first?" reuses the previous question's notes; chat prompt forbids invented steps/settings and flags "Claims to check" (8 new tests)
 
 ## In progress
 - (none)
 
 ## Next step
-- All steps done. User: merge the PR, git pull, restart the bot, chat with it, add newchat in BotFather
+- Step 2: /todo pages with buttons
 
 ## Decisions
-- Message routing order matters: the link handler is registered before the chat handler, so a link is never treated as chat. A test checks this.
-- Uses only the local qwen2.5:7b model through Ollama (free, private), as the user asked.
-- Notes are found from the current AND previous user message, so follow-up questions work.
-- temperature 0.4: a bit more natural than notes (0.2) but still careful.
+- /plan added to this batch: the user asked about it and it's small.
+- Follow-up = short message (<= 4 meaningful words) with a pointing word (it, that, which, first, more...).
 
 ## Problems / questions for the user
 - (none yet)

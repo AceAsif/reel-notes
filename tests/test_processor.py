@@ -367,3 +367,28 @@ def test_chat_history_is_limited(notes, monkeypatch):
                for i in range(40)]
     p.chat_reply("hello", history)
     assert len(sent["body"]["messages"]) == 1 + p.CHAT_HISTORY_TURNS * 2 + 1
+
+
+@pytest.mark.parametrize("msg,expected", [
+    ("which one should I try first?", True),
+    ("how do I install it?", True),
+    ("tell me more", True),
+    ("what did I save about claude plugins?", False),
+    ("design skills for landing pages and animations in react apps", False),
+])
+def test_is_follow_up(msg, expected):
+    assert p.is_follow_up(msg) is expected
+
+
+def test_follow_up_keeps_previous_notes(notes, monkeypatch):
+    claude = make_note(title="Claude Plugins Strix Mem", source="https://x/a")
+    make_note(title="Try First Trading Skill", source="https://x/b", tags=["trading"])
+    capture_chat(monkeypatch)
+    history = [{"role": "user", "content": "what did I save about claude plugins?"},
+               {"role": "assistant", "content": "..."}]
+    _, sources = p.chat_reply("which one should I try first?", history)
+    assert sources[0] == claude
+
+
+def test_chat_prompt_forbids_invented_steps():
+    assert "NEVER invent steps" in p.CHAT_SYSTEM and "Claims to check" in p.CHAT_SYSTEM

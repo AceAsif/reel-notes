@@ -1167,6 +1167,10 @@ How to talk:
   Copy names, commands and links exactly. If the notes don't cover it, say
   "I don't have that in your notes" and suggest saving a reel about it.
   Never invent tools, links, numbers or quotes.
+- NEVER invent steps, install instructions, menus or settings. Only give steps that
+  are written in the notes. If the notes have no steps, say so and suggest
+  "/plan <number>" to get a ready-made prompt for Claude.
+- If a note lists something under "Claims to check", say it's not verified yet.
 - Small talk (hello, thanks, how are you) is fine: answer briefly and kindly.
 - When it helps, suggest a next step, e.g. "Want a reminder? /remind 2 friday".
 - Use plain text only, no Markdown symbols like ** or ##.
@@ -1175,6 +1179,13 @@ MY NOTES FOR THIS MESSAGE:
 <<NOTES>>
 """
 CHAT_HISTORY_TURNS = 6          # remembered back-and-forth messages
+FOLLOW_UP_RE = re.compile(r"\b(it|its|that|this|these|those|them|they|one|first|second|"
+                          r"third|last|more|else|again|next|which|same|above)\b", re.I)
+
+
+def is_follow_up(message: str) -> bool:
+    """Short message that points back at the last answer ('which one first?')."""
+    return bool(FOLLOW_UP_RE.search(message)) and len(question_words(message)) <= 4
 
 
 def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[str, list[Path]]:
@@ -1186,8 +1197,12 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     Returns (reply text, notes that were given to the AI).
     """
     previous = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-    hits = relevant_notes(message, max_notes) or relevant_notes(previous + " " + message,
-                                                                max_notes)
+    if previous and is_follow_up(message):
+        # "which one should I try first?" is about the notes we were just discussing
+        hits = relevant_notes(previous + " " + message, max_notes)
+    else:
+        hits = relevant_notes(message, max_notes) or relevant_notes(previous + " " + message,
+                                                                    max_notes)
     notes = "\n\n".join(f"[Note {n}: {h['title']}]\n{note_summary_text(h['path'])[:2000]}"
                          for n, h in enumerate(hits, start=1)) or "(no matching notes)"
     messages = [{"role": "system", "content": CHAT_SYSTEM.replace("<<NOTES>>", notes)}]
