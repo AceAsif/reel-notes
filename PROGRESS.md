@@ -1,6 +1,6 @@
 # Progress - Small improvements + /plan
 Branch: feature/small-improvements
-Last updated: 2026-11-14 14:15 (Hobart)
+Last updated: 2026-11-14 14:35 (Hobart)
 
 ## Plan
 1. Chat fixes: follow-ups reuse the previous notes; no invented steps; mention unverified claims
@@ -17,11 +17,13 @@ Last updated: 2026-11-14 14:15 (Hobart)
 
 - Step 3: /plan N [my goal] - turns a note into a ready-to-paste Claude prompt in ART format (Act as / Request / Terms: Instructions, Constraints, Output), built only from the note (open actions, key points, links, claims to verify); creator-promo actions left out; very long plans sent as a .txt file (3 new tests)
 
+- Step 4: Weekly resurface (Wednesday 7 pm, RESURFACE=off to disable) + /remember: one note older than 7 days, rotating weekly; shows its key quote, a key point or lesson; '🔁 Another one' button; /note 1 opens it (4 new tests)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 4: resurface one old note each week
+- Step 5: monthly learning summary (1st of the month) + /month
 
 ## Decisions
 - /plan uses a fixed template, not the AI, so the plan only contains what's really in the note; Claude does the thinking when the user pastes it.

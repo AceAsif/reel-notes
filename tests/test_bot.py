@@ -151,3 +151,19 @@ def test_todo_high_filter(many_actions):
 
 def test_todo_page_out_of_range(many_actions):
     assert "page 3/3" in bot.todo_page(99)[0]
+
+
+def test_resurface_message(tmp_path, monkeypatch):
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    (folder / "2020-01-01_1200_a.md").write_text(
+        "# Deep Conversations\n\n## Key quote\n> Ask better questions\n", encoding="utf-8")
+    text, kb, path = bot.resurface_message()
+    assert "💬 Ask better questions" in text and "Deep Conversations" in text
+    assert path.name.startswith("2020-01-01") and kb.inline_keyboard[0][0].callback_data == "resurf:1"
+
+
+def test_resurface_message_when_no_old_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    assert bot.resurface_message()[2] is None

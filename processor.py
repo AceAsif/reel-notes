@@ -1294,3 +1294,41 @@ def make_plan(path: Path, my_goal: str = "") -> str:
     if s.get("source"):
         out += ["", f"(Source video: {s['source']})"]
     return "\n".join(out)
+
+
+# ---- resurface an old note (spaced repetition) ------------------------------------
+
+def pick_resurface(today: date | None = None, min_age_days: int = 7,
+                   shift: int = 0) -> dict | None:
+    """One older note to look at again, rotating week by week (shift = 'another one').
+    Returns {'path', 'title', 'text', 'kind', 'age_days'} or None."""
+    today = today or date.today()
+    if not NOTES_DIR.exists():
+        return None
+    old = []
+    for path in sorted(NOTES_DIR.glob("*.md")):
+        try:
+            saved = date.fromisoformat(path.name[:10])
+        except ValueError:
+            continue
+        if (today - saved).days >= min_age_days:
+            old.append((path, saved))
+    if not old:
+        return None
+    week = today.toordinal() // 7 + shift
+    path, saved = old[week % len(old)]
+    s = note_sections(path)
+    quote = [line.lstrip("> ").replace("*(paraphrased)*", "").strip()
+             for line in s.get("Key quote", [])]
+    points = [line.lstrip("- ") for line in s.get("Key points", [])]
+    lesson = s.get("Main lesson", [])
+    if quote and quote[0]:
+        text, kind = quote[0], "quote"
+    elif points:
+        text, kind = points[week % len(points)], "point"
+    elif lesson:
+        text, kind = lesson[0], "lesson"
+    else:
+        text, kind = " ".join(s.get("Summary", [])), "summary"
+    return {"path": path, "title": s["title"], "text": text, "kind": kind,
+            "age_days": (today - saved).days}

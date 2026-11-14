@@ -781,6 +781,61 @@ async def reminder_button_pressed(update: Update, context: ContextTypes.DEFAULT_
                                   f"{action['action']}")
 
 
+# ---- resurface old notes --------------------------------------------------------
+
+RESURFACE = os.getenv("RESURFACE", "on").strip().lower()   # "off" to disable
+
+
+def resurface_message(shift: int = 0) -> tuple[str, InlineKeyboardMarkup | None, Path | None]:
+    item = processor.pick_resurface(shift=shift)
+    if item is None:
+        return ("🧠 No notes older than a week yet. I'll start resurfacing them soon!",
+                None, None)
+    icon = {"quote": "💬", "point": "💡", "lesson": "💡", "summary": "📝"}[item["kind"]]
+    weeks = item["age_days"] // 7
+    ago = f"{weeks} week{'s' * (weeks != 1)} ago" if weeks else f"{item['age_days']} days ago"
+    text = (f"🧠 Remember this?\n\n{icon} {item['text']}\n\n"
+            f"📌 From: {item['title']} (saved {ago})\nOpen the full note: /note 1")
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
+        "🔁 Another one", callback_data=f"resurf:{shift + 1}")]])
+    return text, keyboard, item["path"]
+
+
+def remember_for_note_command(application, chat_id: int, path: Path | None) -> None:
+    """So that '/note 1' opens the resurfaced note."""
+    if path is not None:
+        application.user_data[chat_id]["last_results"] = [str(path)]
+
+
+async def weekly_resurface(context: ContextTypes.DEFAULT_TYPE) -> None:
+    text, keyboard, path = resurface_message()
+    if path is None:
+        return                                  # nothing old enough yet: stay quiet
+    remember_for_note_command(context.application, context.job.chat_id, path)
+    await context.bot.send_message(context.job.chat_id, text, reply_markup=keyboard)
+
+
+async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/remember shows one older note to refresh your memory."""
+    if not is_allowed(update):
+        return
+    text, keyboard, path = resurface_message()
+    if path is not None:
+        context.user_data["last_results"] = [str(path)]
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def resurface_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    text, keyboard, path = resurface_message(int(query.data.split(":")[1]))
+    if path is not None:
+        context.user_data["last_results"] = [str(path)]
+    await query.edit_message_text(text, reply_markup=keyboard)
+
+
 def stats_text() -> str:
     s = processor.weekly_stats()
     lines = [f"📊 Last 7 days ({s['start']:%d %b} – {s['end']:%d %b})", "",
@@ -860,6 +915,8 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     app.add_handler(CommandHandler("newchat", newchat))
     app.add_handler(CommandHandler("plan", plan))
+    app.add_handler(CommandHandler("remember", remember))
+    app.add_handler(CallbackQueryHandler(resurface_button_pressed, pattern=r"^resurf:"))
 
     if ALLOWED_USER_ID:
         # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)
@@ -881,6 +938,11 @@ def build_app() -> Application:
             except ValueError:
                 print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
 
+        # Wednesday 7:00 pm: one older note to remember (0 = Sunday, so 3 = Wednesday)
+        if RESURFACE != "off":
+            app.job_queue.run_daily(weekly_resurface,
+                                    time=datetime.time(19, 0, tzinfo=TIMEZONE),
+                                    days=(3,), chat_id=int(ALLOWED_USER_ID))
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))

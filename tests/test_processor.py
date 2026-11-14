@@ -423,3 +423,25 @@ def test_make_plan_skips_creator_promo_actions(notes):
     path = make_note(actions=["Check the broadcast channel from the bio", "Read the README"])
     plan = p.make_plan(path)
     assert "1. Read the README" in plan and "broadcast channel" not in plan
+
+
+# ---- resurface --------------------------------------------------------------------
+
+def test_resurface_picks_only_old_notes_and_rotates(notes):
+    from datetime import date
+    (notes / "2026-10-01_1200_a.md").write_text(
+        "# Old A\n\n## Key points\n- point A1\n- point A2\n", encoding="utf-8")
+    (notes / "2026-10-02_1200_b.md").write_text(
+        "# Old B\n\n## Key quote\n> Stay hungry  *(paraphrased)*\n", encoding="utf-8")
+    (notes / "2026-11-13_1200_new.md").write_text("# New\n\n## Key points\n- n\n", encoding="utf-8")
+    today = date(2026, 11, 14)
+    titles = {p.pick_resurface(today, shift=s)["title"] for s in range(4)}
+    assert titles == {"Old A", "Old B"}                     # never the 1-day-old note
+    quote = next(r for s in range(2) if (r := p.pick_resurface(today, shift=s))["title"] == "Old B")
+    assert quote["kind"] == "quote" and quote["text"] == "Stay hungry"
+
+
+def test_resurface_none_when_all_new(notes):
+    from datetime import date
+    (notes / "2026-11-13_1200_new.md").write_text("# New\n", encoding="utf-8")
+    assert p.pick_resurface(date(2026, 11, 14)) is None
