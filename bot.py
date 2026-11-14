@@ -77,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /search strix\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
@@ -200,7 +200,7 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
             lines += [f"📌 {current_title}"]
         bell = " 🔔" if processor.action_id(a) in reminded else ""
         lines.append(f"{n}. ☐ {a['action']}{bell}")
-    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday · /plan 3",
+    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday",
               "Only 🔥 ones: /todo high"]
 
     keyboard = None
@@ -415,6 +415,41 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_allowed(update):
         context.chat_data["chat_history"] = []
         await update.message.reply_text("🧹 Fresh start! What would you like to talk about?")
+
+
+def note_from_list(context, args) -> tuple[Path | None, str]:
+    """Note N from the last /notes, /search, /tag or chat reply (newest notes if none).
+    Returns (path, rest of the words after the number)."""
+    paths = context.user_data.get("last_results")
+    if not paths:
+        files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
+            if processor.NOTES_DIR.exists() else []
+        paths = [str(f) for f in files]
+    words = list(args or [])
+    n = int(words.pop(0)) if words and words[0].isdigit() else 1
+    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
+        return None, ""
+    return Path(paths[n - 1]), " ".join(words)
+
+
+async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/plan 2  (or /plan 2 my own goal) → a prompt to paste into Claude."""
+    if not is_allowed(update):
+        return
+    path, goal = note_from_list(context, context.args)
+    if path is None:
+        await update.message.reply_text(
+            "Usage: /plan 2  (number from /notes, /search, /tag or a chat reply)\n"
+            "Add your own goal: /plan 2 I want to use it in my bot")
+        return
+    prompt = processor.make_plan(path, goal)
+    await update.message.reply_text(
+        "📋 Here's your action plan. Long-press it → Copy, then paste it into Claude 👇")
+    if len(prompt) <= 4000:
+        await update.message.reply_text(prompt)
+    else:                                         # very long: send as a file instead
+        await update.message.reply_document(document=prompt.encode("utf-8"),
+                                            filename=f"plan_{path.stem[16:] or path.stem}.txt")
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -824,6 +859,7 @@ def build_app() -> Application:
     # Added after the link handler, so links still become notes.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     app.add_handler(CommandHandler("newchat", newchat))
+    app.add_handler(CommandHandler("plan", plan))
 
     if ALLOWED_USER_ID:
         # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)

@@ -392,3 +392,34 @@ def test_follow_up_keeps_previous_notes(notes, monkeypatch):
 
 def test_chat_prompt_forbids_invented_steps():
     assert "NEVER invent steps" in p.CHAT_SYSTEM and "Claims to check" in p.CHAT_SYSTEM
+
+
+# ---- /plan ----------------------------------------------------------------------
+
+def test_make_plan_uses_only_note_content(notes):
+    path = make_note(category="programming", title="5 Claude Plugins",
+                     actions=[{"text": "Read the Strix README", "priority": "high"}, "Try Claude mem"],
+                     resources=[{"name": "Strix", "link": "https://github.com/usestrix/strix"}],
+                     claims=[{"claim": "7 billion free tokens", "why": "no source"}],
+                     key_points=["Strix finds security holes"])
+    p.complete_actions([2])                       # 'Try Claude mem' done: not in the plan
+    plan = p.make_plan(path, "use it in my bot")
+    assert plan.startswith("ACT AS: an experienced software engineer")
+    assert "REQUEST:" in plan and "TERMS" in plan and "Constraints:" in plan and "Output:" in plan
+    assert "1. Read the Strix README" in plan and "Try Claude mem" not in plan
+    assert "https://github.com/usestrix/strix" in plan
+    assert '"7 billion free tokens"' in plan and "My goal: use it in my bot" in plan
+    assert "🔥" not in plan and "## " not in plan
+
+
+def test_make_plan_without_actions(notes):
+    path = make_note(category="motivation", actions=["x"])
+    p.complete_actions([1])
+    plan = p.make_plan(path)
+    assert "supportive personal coach" in plan and "Suggest 3-5 practical actions" in plan
+
+
+def test_make_plan_skips_creator_promo_actions(notes):
+    path = make_note(actions=["Check the broadcast channel from the bio", "Read the README"])
+    plan = p.make_plan(path)
+    assert "1. Read the README" in plan and "broadcast channel" not in plan

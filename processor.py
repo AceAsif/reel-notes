@@ -1219,3 +1219,78 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     reply = re.sub(r"\*\*|__|^#+\s*", "", reply, flags=re.M)   # strip Markdown leftovers
     return reply or "Sorry, I couldn't think of an answer. Can you ask another way?", \
         [h["path"] for h in hits]
+
+
+# ---- /plan: turn a note into a ready-to-paste prompt for Claude ---------------
+
+def note_sections(path: Path) -> dict:
+    """{'title':..., 'category':..., 'source':..., 'Summary': [lines], ...}."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    sections = {"title": lines[0].lstrip("# ").strip() if lines else path.stem}
+    current = None
+    for line in lines[1:]:
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = []
+        elif current is None:
+            m = re.match(r"- (Category|Source): (.*)", line)
+            if m:
+                sections[m.group(1).lower()] = m.group(2).strip()
+        elif line.strip():
+            sections[current].append(line.strip())
+    return sections
+
+
+ACT_AS = {
+    "programming": "an experienced software engineer and AI-tools expert",
+    "tech": "an experienced tech expert who explains AI tools clearly",
+    "motivation": "a supportive personal coach who turns ideas into small habits",
+}
+
+
+def make_plan(path: Path, my_goal: str = "") -> str:
+    """A prompt in ART format (Act as / Request / Terms: Instructions, Constraints,
+    Output) built ONLY from the note's own content — no AI, so nothing is invented."""
+    s = note_sections(path)
+    category = s.get("category", "other")
+    open_actions = [re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line) for line in
+                    s.get("Action items", []) + s.get("Habit to try", [])
+                    if line.startswith("- [ ] ")]
+    # "Check my bio / DM me / comment X" actions are for the creator, not for Claude
+    open_actions = [a for a in open_actions if not LOW_PRIORITY_RE.search(a)]
+    summary = " ".join(s.get("Summary", []))
+    key_points = [line.lstrip("- ") for line in s.get("Key points", [])][:7]
+    resources = [line.lstrip("- ") for line in s.get("Resources", [])][:8]
+    claims = [line.lstrip("- ").replace("⚠️ ", "") for line in s.get("Claims to check", [])]
+
+    out = [f"ACT AS: {ACT_AS.get(category, 'a helpful expert assistant')}.", "",
+           f"REQUEST: Help me act on what I learned from a short video: \"{s['title']}\"."]
+    if summary:
+        out.append(f"What it was about: {summary}")
+    if my_goal:
+        out.append(f"My goal: {my_goal}")
+    out += ["", "TERMS", "", "Instructions:"]
+    if open_actions:
+        out.append("Help me complete these actions, in a sensible order:")
+        out += [f"{i}. {a}" for i, a in enumerate(open_actions, 1)]
+    else:
+        out.append("Suggest 3-5 practical actions I can take from this video, then help me do them.")
+    if key_points:
+        out += ["", "What the video said (key points):"] + [f"- {k}" for k in key_points]
+    if resources:
+        out += ["", "Tools and links from the video:"] + [f"- {r}" for r in resources]
+    out += ["", "Constraints:",
+            "- First check that each tool or link is real, current and safe to use; "
+            "tell me if something looks outdated, unsafe or like a scam.",
+            "- Prefer official sources (GitHub repos, official docs) over the video's claims."]
+    out += [f"- Verify this claim before relying on it: {c}" for c in claims]
+    out += ["- I use Windows. Give exact commands I can copy.",
+            "- Use simple English (English is not my first language).",
+            "- Ask me before installing anything or changing my files or accounts."]
+    out += ["", "Output:",
+            "- A step-by-step plan: for each step, what to do, why, and how long it takes.",
+            "- Exact commands or settings where needed.",
+            "- A short checklist at the end that I can tick off."]
+    if s.get("source"):
+        out += ["", f"(Source video: {s['source']})"]
+    return "\n".join(out)
