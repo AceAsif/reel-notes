@@ -1,6 +1,6 @@
 # Progress - Small improvements + /plan
 Branch: feature/small-improvements
-Last updated: 2026-11-14 13:40 (Hobart)
+Last updated: 2026-11-14 13:55 (Hobart)
 
 ## Plan
 1. Chat fixes: follow-ups reuse the previous notes; no invented steps; mention unverified claims
@@ -13,11 +13,13 @@ Last updated: 2026-11-14 13:40 (Hobart)
 ## Done
 - Step 1: is_follow_up() so "which one first?" reuses the previous question's notes; chat prompt forbids invented steps/settings and flags "Claims to check" (8 new tests)
 
+- Step 2: /todo in pages of 10 with Prev/Next buttons, counts per priority, real /todo numbers kept; /todo high|normal|low and /todo 2 (4 new tests)
+
 ## In progress
 - (none)
 
 ## Next step
-- Step 2: /todo pages with buttons
+- Step 3: /plan N (note -> ready-to-paste Claude prompt in ART format)
 
 ## Decisions
 - /plan added to this batch: the user asked about it and it's small.

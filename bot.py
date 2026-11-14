@@ -166,15 +166,32 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await status.edit_text(format_reply(data, note_path))
 
 
-def actions_text() -> str:
-    actions = processor.open_actions()
-    if not actions:
-        return "🎉 No open action items."
+TODO_PAGE_SIZE = 10
+LEVELS = ("high", "normal", "low")
+
+
+def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
+    """One page of /todo (10 actions). Numbers are the real /todo numbers, so
+    /done 23 works from any page. level='high' shows only 🔥 actions."""
+    all_actions = list(enumerate(processor.open_actions(), start=1))
+    if not all_actions:
+        return "🎉 No open action items.", None
+    items = [(n, a) for n, a in all_actions if level is None or a["priority"] == level]
+    if not items:
+        return f"No {level} priority actions. See everything with /todo", None
+    pages = (len(items) + TODO_PAGE_SIZE - 1) // TODO_PAGE_SIZE
+    page = max(1, min(page, pages))
+    shown = items[(page - 1) * TODO_PAGE_SIZE: page * TODO_PAGE_SIZE]
+
     headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
     reminded = {r["action_id"] for r in processor.load_reminders()}
-    lines = [f"You have {len(actions)} open action items:"]
+    counts = {lv: sum(a["priority"] == lv for _, a in all_actions) for lv in LEVELS}
+    what = f"{level} priority " if level else ""
+    lines = [f"📋 {len(items)} open {what}actions"
+             + (f" (page {page}/{pages})" if pages > 1 else "") + ":",
+             f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low"]
     current_priority, current_title = None, None
-    for n, a in enumerate(actions, start=1):
+    for n, a in shown:
         if a["priority"] != current_priority:   # priority section
             current_priority, current_title = a["priority"], None
             lines += ["", f"━━ {headings[a['priority']]} ━━"]
@@ -183,18 +200,51 @@ def actions_text() -> str:
             lines += [f"📌 {current_title}"]
         bell = " 🔔" if processor.action_id(a) in reminded else ""
         lines.append(f"{n}. ☐ {a['action']}{bell}")
-    lines += ["", "Tick off with /done 2  (or several: /done 1 3 4)",
-              "Not doing one? /skip 3   Change priority: /high 3  /low 3  /normal 3",
-              "Reminder: /remind 3 friday   (🔔 = reminder set, see /reminders)"]
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3900] + "\n...\n\nList too long, tick some off with /done first."
-    return text
+    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday · /plan 3",
+              "Only 🔥 ones: /todo high"]
+
+    keyboard = None
+    if pages > 1:
+        tag = level or "all"
+        row = []
+        if page > 1:
+            row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"todo:{tag}:{page - 1}"))
+        row.append(InlineKeyboardButton(f"{page}/{pages}", callback_data=f"todo:{tag}:{page}"))
+        if page < pages:
+            row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
+        keyboard = InlineKeyboardMarkup([row])
+    return "\n".join(lines)[:4000], keyboard
+
+
+def actions_text() -> str:
+    """First page of /todo as plain text (used by the weekly review)."""
+    text, keyboard = todo_page(1)
+    return text + ("\n\nMore pages: send /todo" if keyboard else "")
 
 
 async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if is_allowed(update):
-        await update.message.reply_text(actions_text())
+    """/todo, /todo 2 (page 2), /todo high (only 🔥), /todo low 2."""
+    if not is_allowed(update):
+        return
+    args = [a.lower() for a in (context.args or [])]
+    level = next((a for a in args if a in LEVELS), None)
+    page = next((int(a) for a in args if a.isdigit()), 1)
+    text, keyboard = todo_page(page, level)
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⬅️ / ➡️ page buttons under /todo."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    _, tag, page = query.data.split(":")
+    text, keyboard = todo_page(int(page), None if tag == "all" else tag)
+    try:
+        await query.edit_message_text(text, reply_markup=keyboard)
+    except Exception:
+        pass                                    # same page pressed again: nothing changed
 
 
 async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -756,6 +806,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
     app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
+    app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("retag", retag))

@@ -114,3 +114,40 @@ def test_newchat_clears_history(monkeypatch):
                             effective_user=types.SimpleNamespace(id=1)),
                             types.SimpleNamespace(chat_data=chat_data)))
     assert chat_data["chat_history"] == []
+
+
+# ---- /todo pages ---------------------------------------------------------------
+
+@pytest.fixture
+def many_actions(tmp_path, monkeypatch):
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", folder)
+    monkeypatch.setattr(bot.processor, "REMINDERS_FILE", tmp_path / "r.json")
+    actions = "\n".join([f"- [ ] 🔥 high {i}" for i in range(3)] +
+                        [f"- [ ] normal {i}" for i in range(20)])
+    (folder / "2026-11-14_1200_x.md").write_text(
+        f"# Note X\n\n## Action items\n{actions}\n", encoding="utf-8")
+
+
+def test_todo_first_page(many_actions):
+    text, kb = bot.todo_page(1)
+    assert "23 open actions (page 1/3)" in text and "1. ☐ high 0" in text
+    assert "11. ☐" not in text
+    assert [b.text for b in kb.inline_keyboard[0]] == ["1/3", "Next ➡️"]
+
+
+def test_todo_last_page_keeps_real_numbers(many_actions):
+    text, kb = bot.todo_page(3)
+    assert "21. ☐ normal 17" in text and "23. ☐ normal 19" in text
+    assert [b.text for b in kb.inline_keyboard[0]] == ["⬅️ Prev", "3/3"]
+
+
+def test_todo_high_filter(many_actions):
+    text, kb = bot.todo_page(1, "high")
+    assert "3 open high priority actions" in text and kb is None
+    assert "normal 0" not in text
+
+
+def test_todo_page_out_of_range(many_actions):
+    assert "page 3/3" in bot.todo_page(99)[0]
