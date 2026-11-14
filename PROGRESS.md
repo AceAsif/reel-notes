@@ -1,6 +1,6 @@
 # Progress - Creator info + GitHub repo check
 Branch: feature/creator-and-repo-check
-Last updated: 2026-11-15 00:28 (Hobart)
+Last updated: 2026-11-15 00:48 (Hobart)
 
 ## Plan
 1. Save the creator (name, @handle, profile link) and a "From the creator" section with their offers (comment X, DM, link in bio); better promo filter; /plan puts offers in a "Backup if a link is wrong" part
@@ -14,6 +14,8 @@ Last updated: 2026-11-15 00:28 (Hobart)
 
 - Fix: GitHub search only when the video talks about code
 
+- Screenshots → notes (albums = one note); qwen3:8b default with thinking off; roadmap courses no longer get GitHub repos
+
 ## In progress
 - (none)
 
@@ -21,6 +23,7 @@ Last updated: 2026-11-15 00:28 (Hobart)
 - Nothing; waiting for merge
 
 ## Decisions
+- Plain 'GitHub' in a roadmap isn't a code hint; course/docs/tutorial names never searched on GitHub
 - Common words (Settings, Muse) matched random popular repos; now a code hint (GitHub, open source, install command...) is needed
 - Rate limits (403) are not treated as 'not found', so a busy API never shows a false warning
 - Nothing about the creator is ever removed from a note: offers are kept as low actions AND listed under "From the creator". Only the Claude prompt (/plan) moves them to a backup part, because Claude can't comment on Instagram.

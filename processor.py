@@ -22,7 +22,7 @@ from faster_whisper import WhisperModel
 NOTES_DIR = Path(os.getenv("NOTES_DIR", "notes"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 # Optional: a GitHub token raises the API limit (10 -> 30 searches/minute).
 # Not needed for normal use.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
@@ -140,6 +140,17 @@ POST CAPTION:
 """
 
 
+def ollama_extra() -> dict:
+    """Thinking models (qwen3, deepseek-r1) 'think' for minutes before answering.
+    Notes don't need that, so turn it off. Other models don't get the option."""
+    m = OLLAMA_MODEL.lower()
+    return {"think": False} if m.startswith(("qwen3", "deepseek-r1")) else {}
+
+
+def strip_thinking(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+
+
 def ask_ollama_json(prompt: str) -> dict:
     """Send a prompt to the local Ollama model and get a JSON object back."""
     # ~3.5 characters per token. Long multi-video posts need a bigger context window
@@ -152,6 +163,7 @@ def ask_ollama_json(prompt: str) -> dict:
             "prompt": prompt,
             "stream": False,
             "format": "json",
+            **ollama_extra(),
             "options": {
                 "temperature": 0.2,  # low = consistent notes for the same reel
                 "num_ctx": num_ctx,  # room for long transcripts + on-screen text
@@ -161,7 +173,7 @@ def ask_ollama_json(prompt: str) -> dict:
     )
     resp.raise_for_status()
     try:
-        data = json.loads(resp.json()["response"])
+        data = json.loads(strip_thinking(resp.json()["response"]))
     except (json.JSONDecodeError, KeyError):
         data = {}
     return data if isinstance(data, dict) else {}
@@ -409,10 +421,17 @@ def find_repo(name: str, source_text: str) -> dict | None:
     return None
 
 
-# Words that show the video is really about code you can download
+# Words that show the video is really about code you can download. Plain "GitHub"
+# isn't enough: roadmaps say "learn Git/GitHub" without pointing to a repo.
 CODE_HINT_RE = re.compile(
-    r"github|open[\s-]?source|\brepo(?:sitory)?\b|\bnpx\b|\bnpm\b|pip install|"
-    r"git clone|brew install|\blibrary\b|\bframework\b|\bcli\b|\bsdk\b", re.I)
+    r"github\.com/|open[\s-]?source|\bon github\b|\b(?:the |this |my |our )repo(?:sitory)?\b|"
+    r"\bnpx\b|npm (?:i|install)\b|pip install|git clone|brew install|uvx?\s", re.I)
+
+# Learning resources (courses, docs, tutorials) are websites, not repos
+COURSE_RE = re.compile(
+    r"\b(?:course|courses|tutorials?|guide|documentation|docs|learn|academy|"
+    r"specialization|getting started|lessons?|skills|bootcamp|textbook|book|youtube)\b"
+    r"|^(?:github|git)$", re.I)
 
 
 def mentions_code(source_text: str) -> bool:
@@ -432,7 +451,8 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
         m = GITHUB_REPO_RE.search(link)
         if m:                                   # already a repo link: check it's real
             info = repo_info(m.group(1), m.group(2))
-        elif not link and category in ("tech", "programming") and code:
+        elif (not link and category in ("tech", "programming") and code
+              and not COURSE_RE.search(str(r.get("name", "")))):
             r["search"] = "github"              # fallback link: GitHub search
             info = find_repo(str(r.get("name", "")), source_text)
         else:
@@ -1348,11 +1368,11 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     resp = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
-              "options": {"temperature": 0.4, "num_ctx": 8192}},
+              **ollama_extra(), "options": {"temperature": 0.4, "num_ctx": 8192}},
         timeout=600,
     )
     resp.raise_for_status()
-    reply = (resp.json().get("message", {}).get("content") or "").strip()
+    reply = strip_thinking(resp.json().get("message", {}).get("content") or "")
     reply = re.sub(r"\*\*|__|^#+\s*", "", reply, flags=re.M)   # strip Markdown leftovers
     return reply or "Sorry, I couldn't think of an answer. Can you ask another way?", \
         [h["path"] for h in hits]
