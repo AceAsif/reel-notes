@@ -115,6 +115,62 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await status.edit_text(format_reply(data, note_path))
 
 
+# ---- Screenshots → notes -------------------------------------------------
+# Telegram sends an album as separate messages with the same media_group_id.
+# We collect them for a moment, then make ONE note from all of them.
+ALBUM_WAIT = 2.5          # seconds to wait for the rest of an album
+MAX_SCREENSHOTS = 10
+_albums: dict[str, list] = {}
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
+    msg = update.message
+    if msg.media_group_id:
+        album = _albums.setdefault(msg.media_group_id, [])
+        album.append(msg)
+        if len(album) == 1:                      # first photo: wait for the others
+            context.job_queue.run_once(process_album, ALBUM_WAIT,
+                                       data=msg.media_group_id,
+                                       name=f"album-{msg.media_group_id}")
+        return
+    await process_screenshots([msg])
+
+
+async def process_album(context: ContextTypes.DEFAULT_TYPE) -> None:
+    msgs = _albums.pop(context.job.data, [])
+    if msgs:
+        await process_screenshots(msgs)
+
+
+async def process_screenshots(msgs: list) -> None:
+    first = msgs[0]
+    msgs = msgs[:MAX_SCREENSHOTS]
+    caption = next((m.caption for m in msgs if m.caption), "") or ""
+    link = re.search(LINK_PATTERN, caption)
+    source = link.group(0) if link else "screenshot"
+    if link and await already_saved(first, source):
+        return
+    count = f"{len(msgs)} screenshots" if len(msgs) > 1 else "screenshot"
+    status = await first.reply_text(f"Got the {count} 📸 Reading the text... this takes about a minute.")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, m in enumerate(msgs, start=1):
+                media = m.photo[-1] if m.photo else m.document   # biggest photo size
+                ext = Path(getattr(media, "file_name", "") or "x.jpg").suffix or ".jpg"
+                path = Path(tmp) / f"shot{i}{ext.lower()}"
+                await (await media.get_file()).download_to_drive(path)
+                paths.append(path)
+            note_path, data = await asyncio.to_thread(
+                processor.process_videos, paths, source, caption)
+    except Exception as exc:
+        await status.edit_text(f"❌ Something went wrong: {exc}")
+        return
+    await status.edit_text(format_reply(data, note_path))
+
+
 LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
                 r"youtube\.com/(shorts|watch)|youtu\.be|tiktok\.com)\S*")
 
@@ -949,6 +1005,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("unremind", unremind))
     app.add_handler(CallbackQueryHandler(reminder_button_pressed, pattern=r"^rem:"))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(LINK_PATTERN), handle_link))
     # Everything else you type (not a /command) is a chat message about your notes.
     # Added after the link handler, so links still become notes.

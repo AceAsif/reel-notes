@@ -194,3 +194,38 @@ def test_month_range():
     assert bot.processor.month_range(date(2026, 11, 14)) == (date(2026, 11, 1), date(2026, 11, 14))
     assert bot.processor.month_range(date(2026, 1, 1), previous=True) == \
         (date(2025, 12, 1), date(2025, 12, 31))
+
+
+def test_photo_routes_to_screenshot_handler():
+    from datetime import datetime
+    from telegram import Chat, Message, PhotoSize, Update, User
+    bot.TOKEN = "123:ABC"
+    app = bot.build_app()
+    msg = Message(1, datetime.now(), Chat(1, "private"), from_user=User(1, "me", False),
+                  photo=[PhotoSize("f", "u", 100, 100)])
+    upd = Update(1, message=msg)
+    assert next(h.callback.__name__ for h in app.handlers[0] if h.check_update(upd)) == "handle_photo"
+
+
+class FakeShot:
+    def __init__(self, caption=""):
+        self.caption, self.document, self.replies = caption, None, []
+        self.photo = [types.SimpleNamespace(get_file=self._file)]
+    async def _file(self):
+        async def dl(path): Path(path).write_bytes(b"x")
+        return types.SimpleNamespace(download_to_drive=dl)
+    async def reply_text(self, t):
+        self.replies.append(t)
+        async def edit(x): self.replies.append(x)
+        return types.SimpleNamespace(edit_text=edit)
+
+
+def test_album_makes_one_note(monkeypatch):
+    calls = []
+    def fake(paths, source, caption):
+        calls.append((len(paths), source, caption))
+        return Path("note.md"), {}
+    monkeypatch.setattr(bot.processor, "process_videos", fake)
+    monkeypatch.setattr(bot, "format_reply", lambda d, p: "saved")
+    asyncio.run(bot.process_screenshots([FakeShot("my notes"), FakeShot()]))
+    assert calls == [(2, "screenshot", "my notes")]

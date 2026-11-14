@@ -89,6 +89,13 @@ Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI 
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
 
+## Screenshots → notes
+
+Send a screenshot (or several as one album) to the bot. It reads the text (OCR) and saves a normal note: summary, key points, resources and actions.
+- An album of up to 10 screenshots becomes **one** note.
+- Add a caption to give context. If the caption has the reel link, it becomes the note's Source (and duplicates are caught).
+- For the sharpest text, send the image **as a file** (📎 → File). Telegram makes normal photos smaller.
+
 ## Creator info and link checks
 
 - Every note has a **Creator** line (name, @handle and profile link) when the site gives it.
@@ -123,7 +130,7 @@ Edit notes on your phone carefully. Ticking a box (`- [ ]` → `- [x]`) is fine,
 - Python 3.12 (3.14 is too new for some dependencies)
 - [ffmpeg](https://ffmpeg.org/)
 - [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
-- [Ollama](https://ollama.com/) with a model, e.g. `qwen2.5:7b`
+- [Ollama](https://ollama.com/) with a model, e.g. `qwen3:8b`
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 A GPU helps (Ollama uses it automatically) but is not required.
@@ -136,7 +143,7 @@ winget install Python.Python.3.12
 winget install Gyan.FFmpeg
 winget install UB-Mannheim.TesseractOCR
 winget install Ollama.Ollama
-ollama pull qwen2.5:7b
+ollama pull qwen3:8b
 
 # 2. Project
 cd "D:\Python projects\reel-notes"
@@ -181,7 +188,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | From BotFather. Keep secret |
 | `ALLOWED_USER_ID` | — | Your Telegram ID, so only you can use the bot |
-| `OLLAMA_MODEL` | `llama3.2` | `qwen2.5:7b` gives much better notes |
+| `OLLAMA_MODEL` | `qwen3:8b` | Best free model for 8 GB graphics cards. `qwen2.5:7b` also works |
 | `WHISPER_MODEL` | `small` | `medium` is more accurate but slower |
 | `TESSERACT_CMD` | — | Windows: `C:\Program Files\Tesseract-OCR\tesseract.exe` |
 | `NOTES_DIR` | `notes` | Where notes are saved |

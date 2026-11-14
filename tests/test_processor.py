@@ -550,3 +550,29 @@ def test_github_search_when_video_mentions_open_source(monkeypatch):
     text = "LLM Wiki is an open source desktop app on GitHub"
     res = p.enrich_with_github([{"name": "LLM Wiki"}, {"name": "Other"}], "tech", text)
     assert res[0]["link"].endswith("llm_wiki")
+
+
+ROADMAP = ("Core developer workflow: terminal, VS Code, Git/GitHub. GitHub Skills — "
+           "Git and GitHub workflow. Python Tutorial — official documentation")
+
+
+def test_roadmap_courses_get_google_links(monkeypatch):
+    monkeypatch.setattr(p, "find_repo", lambda n, s: {"link": "https://github.com/x/y", "stars": 9})
+    res = p.enrich_with_github([{"name": "Python Tutorial"}, {"name": "SQLBolt"},
+                                {"name": "GitHub Skills"}], "programming", ROADMAP)
+    assert all("google.com/search" in p.resource_line(r, "programming") for r in res)
+
+
+def test_course_names_skipped_even_for_open_source(monkeypatch):
+    monkeypatch.setattr(p, "find_repo", lambda n, s: {"link": "https://github.com/x/y", "stars": 9})
+    res = p.enrich_with_github([{"name": "Kaggle Learn: Python"}, {"name": "LLM Wiki"}],
+                               "tech", "an open source app on GitHub")
+    assert "link" not in res[0] and res[1]["link"] == "https://github.com/x/y"
+
+
+def test_thinking_off_only_for_qwen3(monkeypatch):
+    monkeypatch.setattr(p, "OLLAMA_MODEL", "qwen3:8b")
+    assert p.ollama_extra() == {"think": False}
+    monkeypatch.setattr(p, "OLLAMA_MODEL", "qwen2.5:7b")
+    assert p.ollama_extra() == {}
+    assert p.strip_thinking("<think>hmm</think>{\"a\":1}") == '{"a":1}'
