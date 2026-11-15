@@ -664,3 +664,23 @@ def test_nudge_picks_overdue_first(tmp_path, monkeypatch):
     make_actions_note(tmp_path, monkeypatch,
                       "- [ ] 🔥 High thing\n- [ ] Late thing 📅 2020-01-01\n")
     assert p.pick_nudge()["action"] == "Late thing"
+
+
+def test_combined_plan(tmp_path):
+    a = tmp_path / "2026-11-14_2106_llm-wiki.md"
+    a.write_text("# LLM Wiki\n\n- Category: tech\n- Source: https://x.com/a\n- Creator: Steve\n\n"
+                 "## Summary\nA wiki app.\n\n## Claims to check\n- ⚠️ \"It is free\" — check\n\n"
+                 "## Key points\n- Imports PDFs\n\n## Action items\n- [ ] 🔥 Install LLM Wiki 📅 2026-11-20\n",
+                 encoding="utf-8")
+    b = tmp_path / "2026-11-15_0112_ai-job.md"
+    b.write_text("# AI Job Roadmap\n\n- Category: programming\n- Source: https://x.com/b\n\n"
+                 "## Action items\n- [ ] Learn Pandas\n- [ ] 🔽 Comment 'Roadmap' for the link\n",
+                 encoding="utf-8")
+    plan = p.make_plan([a, b], "get a data job")
+    assert "from 2 short videos" in plan and "My goal: get a data job" in plan
+    assert 'V1: "LLM Wiki"' in plan and 'V2: "AI Job Roadmap"' in plan
+    assert "- Install LLM Wiki" in plan and "📅" not in plan          # date stripped
+    assert "Verify this claim (V1)" in plan
+    assert "V2 creator: the creator (offered: Comment 'Roadmap' for the link)" in plan
+    assert "- Comment 'Roadmap'" not in plan                            # not an action
+    assert "V1: https://x.com/a · V2: https://x.com/b" in plan

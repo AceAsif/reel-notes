@@ -7,8 +7,10 @@ Last updated: 2026-11-15 22:40 (Hobart)
 
 - Step 2: due dates (/due), DUE SOON section in /todo, nudge + weekly review
 
+- Step 3: /plan for several notes (/plan 1 3 5, /plan #tag), shorter resource lines in plans
+
 ## Next step
-- Step 3: /plan for several notes (/plan 1 3 5 or /plan #tag)
+- Nothing; waiting for the user to merge the PR
 
 ## Decisions
 - Due dates stored as '📅 YYYY-MM-DD' (Obsidian Tasks), due-soon = overdue..+2 days

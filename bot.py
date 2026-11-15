@@ -78,7 +78,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
@@ -656,39 +656,58 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("🧹 Fresh start! What would you like to talk about?")
 
 
-def note_from_list(context, args) -> tuple[Path | None, str]:
-    """Note N from the last /notes, /search, /tag or chat reply (newest notes if none).
-    Returns (path, rest of the words after the number)."""
+def plan_notes(context, args) -> tuple[list[Path], str, str]:
+    """Which notes /plan uses. Returns (paths, my goal, problem message or '').
+    /plan 2 · /plan 1 3 5 · /plan #python · each can end with your own goal."""
+    words = list(args or [])
+    if words and words[0].startswith("#"):
+        tag = words.pop(0)[1:]
+        found = processor.notes_with_tag(tag)[:processor.MAX_PLAN_NOTES]
+        if not found:
+            return [], "", f"No notes tagged #{tag}. See your tags with /tags"
+        return found, " ".join(words), ""
     paths = context.user_data.get("last_results")
     if not paths:
         files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
             if processor.NOTES_DIR.exists() else []
         paths = [str(f) for f in files]
-    words = list(args or [])
-    n = int(words.pop(0)) if words and words[0].isdigit() else 1
-    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
-        return None, ""
-    return Path(paths[n - 1]), " ".join(words)
+    numbers = []
+    while words and words[0].isdigit():
+        numbers.append(int(words.pop(0)))
+    numbers = list(dict.fromkeys(numbers or [1]))
+    if len(numbers) > processor.MAX_PLAN_NOTES:
+        return [], "", f"That's a lot! Pick up to {processor.MAX_PLAN_NOTES} notes for one plan."
+    bad = [n for n in numbers if not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists()]
+    if bad or not paths:
+        return [], "", ("Usage: /plan 2  ·  several notes: /plan 1 3 5  ·  by tag: /plan #python\n"
+                        "(numbers from /notes, /search, /tag or a chat reply)\n"
+                        "Add your own goal at the end: /plan 1 3 I want to use it in my bot")
+    return [Path(paths[n - 1]) for n in numbers], " ".join(words), ""
 
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/plan 2  (or /plan 2 my own goal) → a prompt to paste into Claude."""
+    """/plan 2 · /plan 1 3 5 · /plan #python (+ your goal) → a prompt to paste into Claude."""
     if not is_allowed(update):
         return
-    path, goal = note_from_list(context, context.args)
-    if path is None:
-        await update.message.reply_text(
-            "Usage: /plan 2  (number from /notes, /search, /tag or a chat reply)\n"
-            "Add your own goal: /plan 2 I want to use it in my bot")
+    paths, goal, problem = plan_notes(context, context.args)
+    if problem:
+        await update.message.reply_text(problem)
         return
-    prompt = processor.make_plan(path, goal)
+    prompt = processor.make_plan(paths if len(paths) > 1 else paths[0], goal)
+    what = f"combined plan from {len(paths)} notes" if len(paths) > 1 else "action plan"
+    titles = "\n".join(f"V{i}. {p.stem[16:] or p.stem}" for i, p in enumerate(paths, 1)) \
+        if len(paths) > 1 else ""
     await update.message.reply_text(
-        "📋 Here's your action plan. Long-press it → Copy, then paste it into Claude 👇")
+        f"📋 Here's your {what}. Long-press it → Copy, then paste it into Claude 👇"
+        + (f"\n\n{titles}" if titles else ""))
     if len(prompt) <= 4000:
         await update.message.reply_text(prompt)
     else:                                         # very long: send as a file instead
-        await update.message.reply_document(document=prompt.encode("utf-8"),
-                                            filename=f"plan_{path.stem[16:] or path.stem}.txt")
+        name = "combined" if len(paths) > 1 else (paths[0].stem[16:] or paths[0].stem)
+        await update.message.reply_document(
+            document=prompt.encode("utf-8"), filename=f"plan_{name}.txt",
+            caption="Too long for one message, so here it is as a file. "
+                    "In Claude, tap 📎 and attach this file (or open it and copy all).")
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

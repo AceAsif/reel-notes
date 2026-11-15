@@ -343,3 +343,18 @@ def test_todo_shows_due_section(tmp_path, monkeypatch):
     assert text.index("DUE SOON") < text.index("HIGH PRIORITY")
     assert "1. ☐ Late  ⚠️ overdue" in text
     assert "overdue" in bot.due_text()
+
+
+def test_plan_notes_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    for i in range(1, 4):
+        (tmp_path / f"2026-11-1{i}_0900_n{i}.md").write_text(f"# N{i}\n- Tags: #python\n",
+                                                            encoding="utf-8")
+    ctx = types.SimpleNamespace(user_data={})
+    paths, goal, problem = bot.plan_notes(ctx, ["1", "3", "my", "goal"])
+    assert [p.name[:10] for p in paths] == ["2026-11-13", "2026-11-11"] and goal == "my goal"
+    paths, _, _ = bot.plan_notes(ctx, ["#python"])
+    assert len(paths) == 3
+    assert "No notes tagged" in bot.plan_notes(ctx, ["#nothing"])[2]
+    assert "Usage" in bot.plan_notes(ctx, ["9"])[2]
+    assert bot.plan_notes(ctx, [])[0][0].name.startswith("2026-11-13")     # newest by default
