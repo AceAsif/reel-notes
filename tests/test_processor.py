@@ -607,3 +607,80 @@ def test_health_checks_when_everything_is_off(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "NOTES_DIR", tmp_path / "missing")
     checks = {name: ok for ok, name, _ in p.health_checks()}
     assert checks["Ollama"] is False and checks["Notes folder"] is False
+
+
+def make_actions_note(tmp_path, monkeypatch, body):
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    (tmp_path / "2026-11-10_0900_a.md").write_text(
+        "# A\n\n## Action items\n" + body, encoding="utf-8")
+    return tmp_path / "2026-11-10_0900_a.md"
+
+
+def test_split_due_and_label():
+    from datetime import date
+    assert p.split_due("Learn Pandas 📅 2026-11-20") == ("Learn Pandas", date(2026, 11, 20))
+    assert p.split_due("Learn Pandas") == ("Learn Pandas", None)
+    today = date(2026, 11, 16)
+    assert p.due_label(date(2026, 11, 15), today).startswith("⚠️ overdue")
+    assert p.due_label(today, today) == "📅 today"
+    assert p.due_label(date(2026, 11, 17), today) == "📅 tomorrow"
+    assert p.due_label(date(2026, 11, 20), today) == "📅 Fri 20 Nov"
+
+
+def test_parse_due():
+    from datetime import date
+    mon = date(2026, 11, 16)
+    assert p.parse_due("friday", mon) == date(2026, 11, 20)
+    assert p.parse_due("monday", mon) == mon                    # today counts
+    assert p.parse_due("in 3 days", mon) == date(2026, 11, 19)
+    assert p.parse_due("20/11", mon) == date(2026, 11, 20)
+    assert p.parse_due("banana", mon) is None
+
+
+def test_due_soon_actions_go_first_and_priority_keeps_date(tmp_path, monkeypatch):
+    from datetime import date, timedelta
+    soon = date.today() + timedelta(days=1)
+    note = make_actions_note(tmp_path, monkeypatch,
+                             "- [ ] 🔥 High thing\n- [ ] Normal thing\n"
+                             f"- [ ] 🔽 Low but due 📅 {soon:%Y-%m-%d}\n")
+    acts = p.open_actions()
+    assert acts[0]["action"] == "Low but due" and acts[0]["due"] == soon
+    assert acts[1]["action"] == "High thing"
+    p.set_priority([1], "high")                                  # date must survive
+    assert f"- [ ] 🔥 Low but due 📅 {soon:%Y-%m-%d}" in note.read_text(encoding="utf-8")
+
+
+def test_set_due_and_clear(tmp_path, monkeypatch):
+    from datetime import date
+    note = make_actions_note(tmp_path, monkeypatch, "- [ ] 🔥 Learn Pandas\n")
+    p.set_due([1], date(2030, 1, 5))
+    assert "- [ ] 🔥 Learn Pandas 📅 2030-01-05" in note.read_text(encoding="utf-8")
+    p.set_due([1], None)
+    assert note.read_text(encoding="utf-8").endswith("- [ ] 🔥 Learn Pandas\n")
+
+
+def test_nudge_picks_overdue_first(tmp_path, monkeypatch):
+    from datetime import date
+    make_actions_note(tmp_path, monkeypatch,
+                      "- [ ] 🔥 High thing\n- [ ] Late thing 📅 2020-01-01\n")
+    assert p.pick_nudge()["action"] == "Late thing"
+
+
+def test_combined_plan(tmp_path):
+    a = tmp_path / "2026-11-14_2106_llm-wiki.md"
+    a.write_text("# LLM Wiki\n\n- Category: tech\n- Source: https://x.com/a\n- Creator: Steve\n\n"
+                 "## Summary\nA wiki app.\n\n## Claims to check\n- ⚠️ \"It is free\" — check\n\n"
+                 "## Key points\n- Imports PDFs\n\n## Action items\n- [ ] 🔥 Install LLM Wiki 📅 2026-11-20\n",
+                 encoding="utf-8")
+    b = tmp_path / "2026-11-15_0112_ai-job.md"
+    b.write_text("# AI Job Roadmap\n\n- Category: programming\n- Source: https://x.com/b\n\n"
+                 "## Action items\n- [ ] Learn Pandas\n- [ ] 🔽 Comment 'Roadmap' for the link\n",
+                 encoding="utf-8")
+    plan = p.make_plan([a, b], "get a data job")
+    assert "from 2 short videos" in plan and "My goal: get a data job" in plan
+    assert 'V1: "LLM Wiki"' in plan and 'V2: "AI Job Roadmap"' in plan
+    assert "- Install LLM Wiki" in plan and "📅" not in plan          # date stripped
+    assert "Verify this claim (V1)" in plan
+    assert "V2 creator: the creator (offered: Comment 'Roadmap' for the link)" in plan
+    assert "- Comment 'Roadmap'" not in plan                            # not an action
+    assert "V1: https://x.com/a · V2: https://x.com/b" in plan

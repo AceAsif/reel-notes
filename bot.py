@@ -77,8 +77,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
+        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
@@ -104,8 +104,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         with tempfile.TemporaryDirectory() as tmp:
             video_path = Path(tmp) / "reel.mp4"
-            tg_file = await media.get_file()
-            await tg_file.download_to_drive(video_path)
+            await download(media, video_path)
             # Heavy work runs in a thread so the bot stays responsive
             note_path, data = await asyncio.to_thread(
                 processor.process_video, video_path, msg.caption or ""
@@ -115,6 +114,20 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await status.edit_text(format_reply(data, note_path))
+
+
+async def download(media, path: Path, tries: int = 3) -> None:
+    """Download a Telegram photo/video, retrying when the connection is slow."""
+    for attempt in range(1, tries + 1):
+        try:
+            tg_file = await media.get_file(read_timeout=60)
+            await tg_file.download_to_drive(path, read_timeout=120)
+            return
+        except (TimedOut, NetworkError):
+            if attempt == tries:
+                raise RuntimeError("Telegram download timed out 3 times. "
+                                   "Check your internet and send it again.")
+            await asyncio.sleep(3 * attempt)
 
 
 # ---- Screenshots → notes -------------------------------------------------
@@ -163,7 +176,7 @@ async def process_screenshots(msgs: list) -> None:
                 media = m.photo[-1] if m.photo else m.document   # biggest photo size
                 ext = Path(getattr(media, "file_name", "") or "x.jpg").suffix or ".jpg"
                 path = Path(tmp) / f"shot{i}{ext.lower()}"
-                await (await media.get_file()).download_to_drive(path)
+                await download(media, path)
                 paths.append(path)
             note_path, data = await asyncio.to_thread(
                 processor.process_videos, paths, source, caption)
@@ -347,7 +360,10 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
     page = max(1, min(page, pages))
     shown = items[(page - 1) * TODO_PAGE_SIZE: page * TODO_PAGE_SIZE]
 
-    headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
+    headings = {"due": "⏰ DUE SOON", "high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL",
+                "low": "🔽 LOW"}
+    def group(a):
+        return "due" if processor.is_due_soon(a) else a["priority"]
     reminded = {r["action_id"] for r in processor.load_reminders()}
     counts = {lv: sum(a["priority"] == lv for _, a in all_actions) for lv in LEVELS}
     what = f"{level} priority " if level else ""
@@ -356,15 +372,17 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
              f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low"]
     current_priority, current_title = None, None
     for n, a in shown:
-        if a["priority"] != current_priority:   # priority section
-            current_priority, current_title = a["priority"], None
-            lines += ["", f"━━ {headings[a['priority']]} ━━"]
+        if group(a) != current_priority:        # due-soon / priority section
+            current_priority, current_title = group(a), None
+            lines += ["", f"━━ {headings[current_priority]} ━━"]
         if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
             lines += [f"📌 {current_title}"]
         bell = " 🔔" if processor.action_id(a) in reminded else ""
-        lines.append(f"{n}. ☐ {a['action']}{bell}")
-    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday",
+        due = f"  {processor.due_label(a['due'])}" if a["due"] else ""
+        icon = processor.PRIORITY_ICON[a["priority"]] if group(a) == "due" else ""
+        lines.append(f"{n}. ☐ {icon}{a['action']}{due}{bell}")
+    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /due 3 friday · /remind 3 friday",
               "Only 🔥 ones: /todo high"]
 
     keyboard = None
@@ -378,6 +396,19 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
             row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
         keyboard = InlineKeyboardMarkup([row])
     return "\n".join(lines)[:4000], keyboard
+
+
+def due_text() -> str:
+    """Overdue + due this week, for the weekly review ('' if nothing has a date)."""
+    overdue, coming = processor.dated_actions()
+    lines = []
+    if overdue:
+        lines += ["", f"⚠️ {len(overdue)} overdue:"]
+        lines += [f"{n}. {a['action']} ({a['due']:%a %d %b})" for n, a in overdue]
+    if coming:
+        lines += ["", f"📅 Due this week ({len(coming)}):"]
+        lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}" for n, a in coming]
+    return "\n".join(lines)
 
 
 def actions_text() -> str:
@@ -460,6 +491,50 @@ async def change_priority(update: Update, context: ContextTypes.DEFAULT_TYPE,
     reply = [f"{icon} Now {level} priority:", *[f"• {t}" for t in changed], "",
              "The list order has changed, so send /todo before your next command."]
     await update.message.reply_text("\n".join(reply))
+
+
+async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/due 3 friday · /due 2 5 20/11 · /due 3 off · /due (list dated actions)."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    numbers = []
+    while args and args[0].isdigit():
+        numbers.append(int(args.pop(0)))
+    when = " ".join(args).strip()
+    if not numbers:
+        overdue, coming = processor.dated_actions()
+        later = [(n, a) for n, a in enumerate(processor.open_actions(), start=1)
+                 if a["due"] and (n, a) not in overdue and (n, a) not in coming]
+        if not (overdue or coming or later):
+            await update.message.reply_text(
+                "No actions have a due date yet.\nAdd one: /due 3 friday  (see numbers in /todo)")
+            return
+        lines = ["📅 Actions with a due date:"]
+        lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}"
+                  for n, a in overdue + coming + later]
+        await update.message.reply_text("\n".join(lines)[:4000])
+        return
+    if not when:
+        await update.message.reply_text("When is it due? e.g. /due 3 friday, /due 3 20/11, "
+                                        "/due 3 in 5 days. Remove it: /due 3 off")
+        return
+    if when.lower() in ("off", "none", "clear", "remove"):
+        changed = processor.set_due(numbers, None)
+        msg = "🗑 Removed the due date from:" if changed else "No action with that number."
+    else:
+        day = processor.parse_due(when)
+        if day is None:
+            await update.message.reply_text(
+                f"I don't understand “{when}” (or it's in the past). Try: friday, tomorrow, "
+                "next week, in 3 days, 20/11, 2026-11-20")
+            return
+        changed = processor.set_due(numbers, day)
+        msg = f"📅 Due {processor.due_label(day)[2:]}:" if changed else "No action with that number."
+    lines = [msg] + [f"• {t}" for t in changed]
+    if changed:
+        lines.append("\nNumbers in /todo may change (due-soon actions move to the top).")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def high(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,39 +656,58 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("🧹 Fresh start! What would you like to talk about?")
 
 
-def note_from_list(context, args) -> tuple[Path | None, str]:
-    """Note N from the last /notes, /search, /tag or chat reply (newest notes if none).
-    Returns (path, rest of the words after the number)."""
+def plan_notes(context, args) -> tuple[list[Path], str, str]:
+    """Which notes /plan uses. Returns (paths, my goal, problem message or '').
+    /plan 2 · /plan 1 3 5 · /plan #python · each can end with your own goal."""
+    words = list(args or [])
+    if words and words[0].startswith("#"):
+        tag = words.pop(0)[1:]
+        found = processor.notes_with_tag(tag)[:processor.MAX_PLAN_NOTES]
+        if not found:
+            return [], "", f"No notes tagged #{tag}. See your tags with /tags"
+        return found, " ".join(words), ""
     paths = context.user_data.get("last_results")
     if not paths:
         files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
             if processor.NOTES_DIR.exists() else []
         paths = [str(f) for f in files]
-    words = list(args or [])
-    n = int(words.pop(0)) if words and words[0].isdigit() else 1
-    if not paths or not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
-        return None, ""
-    return Path(paths[n - 1]), " ".join(words)
+    numbers = []
+    while words and words[0].isdigit():
+        numbers.append(int(words.pop(0)))
+    numbers = list(dict.fromkeys(numbers or [1]))
+    if len(numbers) > processor.MAX_PLAN_NOTES:
+        return [], "", f"That's a lot! Pick up to {processor.MAX_PLAN_NOTES} notes for one plan."
+    bad = [n for n in numbers if not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists()]
+    if bad or not paths:
+        return [], "", ("Usage: /plan 2  ·  several notes: /plan 1 3 5  ·  by tag: /plan #python\n"
+                        "(numbers from /notes, /search, /tag or a chat reply)\n"
+                        "Add your own goal at the end: /plan 1 3 I want to use it in my bot")
+    return [Path(paths[n - 1]) for n in numbers], " ".join(words), ""
 
 
 async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/plan 2  (or /plan 2 my own goal) → a prompt to paste into Claude."""
+    """/plan 2 · /plan 1 3 5 · /plan #python (+ your goal) → a prompt to paste into Claude."""
     if not is_allowed(update):
         return
-    path, goal = note_from_list(context, context.args)
-    if path is None:
-        await update.message.reply_text(
-            "Usage: /plan 2  (number from /notes, /search, /tag or a chat reply)\n"
-            "Add your own goal: /plan 2 I want to use it in my bot")
+    paths, goal, problem = plan_notes(context, context.args)
+    if problem:
+        await update.message.reply_text(problem)
         return
-    prompt = processor.make_plan(path, goal)
+    prompt = processor.make_plan(paths if len(paths) > 1 else paths[0], goal)
+    what = f"combined plan from {len(paths)} notes" if len(paths) > 1 else "action plan"
+    titles = "\n".join(f"V{i}. {p.stem[16:] or p.stem}" for i, p in enumerate(paths, 1)) \
+        if len(paths) > 1 else ""
     await update.message.reply_text(
-        "📋 Here's your action plan. Long-press it → Copy, then paste it into Claude 👇")
+        f"📋 Here's your {what}. Long-press it → Copy, then paste it into Claude 👇"
+        + (f"\n\n{titles}" if titles else ""))
     if len(prompt) <= 4000:
         await update.message.reply_text(prompt)
     else:                                         # very long: send as a file instead
-        await update.message.reply_document(document=prompt.encode("utf-8"),
-                                            filename=f"plan_{path.stem[16:] or path.stem}.txt")
+        name = "combined" if len(paths) > 1 else (paths[0].stem[16:] or paths[0].stem)
+        await update.message.reply_document(
+            document=prompt.encode("utf-8"), filename=f"plan_{name}.txt",
+            caption="Too long for one message, so here it is as a file. "
+                    "In Claude, tap 📎 and attach this file (or open it and copy all).")
 
 
 async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -759,7 +853,8 @@ NUDGE_TIME = os.getenv("NUDGE_TIME", "08:00").strip().lower()   # "off" to disab
 
 def nudge_message(action: dict, intro: str) -> tuple[str, InlineKeyboardMarkup]:
     icon = processor.PRIORITY_ICON[action["priority"]]
-    text = f"{intro}\n\n{icon}{action['action']}\n\n📌 From: {action['title']}"
+    due = f"\n{processor.due_label(action['due'])}" if action.get("due") else ""
+    text = f"{intro}\n\n{icon}{action['action']}{due}\n\n📌 From: {action['title']}"
     aid = processor.action_id(action)
     buttons = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
@@ -1066,7 +1161,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id,
-        text=("📅 Weekly review\n\n" + stats_text() + "\n\n" + actions_text())[:4000],
+        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],
     )
 
 
@@ -1084,7 +1179,12 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_app() -> Application:
     """Create the bot with all its commands and scheduled jobs (doesn't start it)."""
-    app = Application.builder().token(TOKEN).build()
+    # Telegram's default 5-second limit is too short for photos/videos on a slow
+    # connection ("Timed out"), so give downloads and uploads more time.
+    app = (Application.builder().token(TOKEN)
+           .connect_timeout(20).read_timeout(60).write_timeout(60)
+           .media_write_timeout(120).pool_timeout(20)
+           .build())
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
@@ -1106,6 +1206,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("redo", redo))
+    app.add_handler(CommandHandler("due", due))
     app.add_handler(CallbackQueryHandler(redo_button_pressed, pattern=r"^redo:"))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("update", update_cmd))

@@ -105,6 +105,22 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
   - ⚠️ there were **no updates for over a year**
   - ⚠️ the repo was **not found** (the link may be wrong)
 
+## Action plans for Claude
+
+- `/plan 2` turns note 2 (from `/notes`, `/search` or `/tag`) into a ready-made prompt (ART format) to paste into Claude.
+- `/plan 1 3 5` makes **one combined plan** from up to 5 notes. Claude merges overlapping steps and says which video (V1, V2...) each step comes from.
+- `/plan #python` uses your newest notes with that tag (up to 5).
+- Add your own goal at the end: `/plan 1 3 get a data job`.
+- Long plans come as a `.txt` file. Attach it in Claude with 📎.
+
+## Due dates
+
+- `/due 3 friday` gives action 3 a due date. Also: `tomorrow`, `next week`, `in 5 days`, `20/11`, `2026-11-20`. Several at once: `/due 2 5 friday`.
+- `/due 3 off` removes it. `/due` on its own lists every action with a date.
+- Actions that are overdue or due in the next 2 days go to the top of `/todo` under **⏰ DUE SOON**, so their numbers change.
+- The morning nudge picks an overdue or due-today action first. The Sunday review lists overdue actions and what's due this week.
+- In the note it looks like `- [ ] 🔥 Learn Pandas 📅 2026-11-20` (the Obsidian Tasks format).
+
 ## Fixing and checking the bot
 
 - `/redo` makes your newest note again (e.g. after changing the AI model). `/redo llm wiki` picks a note by its title; `/notes` then `/redo 2` works too. The bot asks first. The old note moves to an `old` folder inside your notes folder, so nothing is lost.

@@ -842,10 +842,90 @@ def open_actions() -> list[dict]:
             # Only real action items count, not "- [ ]" text inside a transcript/caption
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 priority, text = split_priority(line[6:].strip())
+                text, due = split_due(text)
                 results.append({"path": note, "line": i, "title": title,
-                                "action": text, "priority": priority})
-    results.sort(key=lambda a: PRIORITY_ORDER[a["priority"]])  # stable: keeps note order
+                                "action": text, "priority": priority, "due": due})
+    today = date.today()
+    # Due soon (overdue, today, next 2 days) first, soonest first; then by priority.
+    # sort() is stable, so notes keep their order inside each group.
+    results.sort(key=lambda a: (0, a["due"]) if is_due_soon(a, today)
+                 else (1, date.max, PRIORITY_ORDER[a["priority"]]))
     return results
+
+
+# ---- Due dates (Obsidian Tasks style: "📅 2026-11-20" at the end) -------------
+
+DUE_RE = re.compile(r"\s*📅\s*(\d{4}-\d{2}-\d{2})\s*$")
+DUE_SOON_DAYS = 2
+
+
+def split_due(text: str) -> tuple[str, date | None]:
+    m = DUE_RE.search(text)
+    if not m:
+        return text, None
+    try:
+        return text[:m.start()].rstrip(), date.fromisoformat(m.group(1))
+    except ValueError:
+        return text, None
+
+
+def is_due_soon(action: dict, today: date | None = None) -> bool:
+    due = action.get("due")
+    return bool(due) and due <= (today or date.today()) + timedelta(days=DUE_SOON_DAYS)
+
+
+def todo_line(action: dict, priority: str | None = None, due: date | None | str = "keep") -> str:
+    """Rebuild a '- [ ]' line, keeping (or changing) the priority and due date."""
+    due = action.get("due") if due == "keep" else due
+    line = "- [ ] " + PRIORITY_ICON[priority or action["priority"]] + action["action"]
+    return line + (f" 📅 {due:%Y-%m-%d}" if due else "")
+
+
+def due_label(due: date | None, today: date | None = None) -> str:
+    """'⚠️ overdue (Mon 17 Nov)', '📅 today', '📅 tomorrow', '📅 Fri 20 Nov'."""
+    if not due:
+        return ""
+    today = today or date.today()
+    if due < today:
+        return f"⚠️ overdue ({due:%a %d %b})"
+    if due == today:
+        return "📅 today"
+    if due == today + timedelta(days=1):
+        return "📅 tomorrow"
+    return f"📅 {due:%a %d %b}"
+
+
+def set_due(numbers: list[int], due: date | None) -> list[str]:
+    """Set (or clear, with due=None) the due date of actions by their /todo number."""
+    actions = open_actions()
+    chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
+    for a in chosen:
+        lines = a["path"].read_text(encoding="utf-8").splitlines()
+        lines[a["line"]] = todo_line(a, due=due)
+        a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [a["action"] for a in chosen]
+
+
+def parse_due(text: str, today: date | None = None) -> date | None:
+    """'friday', 'tomorrow', 'in 3 days', '20/11', 'next week' → a date (not in the past)."""
+    today = today or date.today()
+    now = datetime.combine(today, datetime.min.time())     # midnight: 'friday' = this Friday
+    when = parse_when(text, now)
+    if when is None or when.date() < today:
+        return None
+    return when.date()
+
+
+def dated_actions(today: date | None = None) -> tuple[list, list]:
+    """(overdue, due in the next 7 days) as (/todo number, action) pairs."""
+    today = today or date.today()
+    overdue, coming = [], []
+    for n, a in enumerate(open_actions(), start=1):
+        if a["due"] and a["due"] < today:
+            overdue.append((n, a))
+        elif a["due"] and a["due"] <= today + timedelta(days=7):
+            coming.append((n, a))
+    return overdue, coming
 
 
 def set_priority(numbers: list[int], level: str) -> list[str]:
@@ -854,7 +934,7 @@ def set_priority(numbers: list[int], level: str) -> list[str]:
     chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
     for a in chosen:
         lines = a["path"].read_text(encoding="utf-8").splitlines()
-        lines[a["line"]] = "- [ ] " + PRIORITY_ICON[level] + a["action"]
+        lines[a["line"]] = todo_line(a, priority=level)
         a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [a["action"] for a in chosen]
 
@@ -1111,9 +1191,14 @@ def pick_nudge(after: str | None = None, today: date | None = None) -> dict | No
         ids = [action_id(a) for a in actions]
         i = ids.index(after) + 1 if after in ids else 0
         return actions[i % len(actions)]
+    today = today or date.today()
+    due_now = [a for a in actions if a["due"] and a["due"] <= today]
+    if due_now:                     # overdue / due today beats everything
+        return due_now[0]
     top = actions[0]["priority"]
-    bucket = [a for a in actions if a["priority"] == top]
-    day = (today or date.today()).toordinal()
+    bucket = [a for a in actions if a["priority"] == top and not a["due"]] or \
+        [a for a in actions if a["priority"] == top]
+    day = today.toordinal()
     return bucket[day % len(bucket)]
 
 
@@ -1405,63 +1490,140 @@ ACT_AS = {
 }
 
 
-def make_plan(path: Path, my_goal: str = "") -> str:
-    """A prompt in ART format (Act as / Request / Terms: Instructions, Constraints,
-    Output) built ONLY from the note's own content — no AI, so nothing is invented."""
+def plan_parts(path: Path) -> dict:
+    """What a plan needs from one note (only the note's own content)."""
     s = note_sections(path)
-    category = s.get("category", "other")
-    open_actions = [re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line) for line in
-                    s.get("Action items", []) + s.get("Habit to try", [])
-                    if line.startswith("- [ ] ")]
+    actions = [split_due(re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line))[0] for line in
+               s.get("Action items", []) + s.get("Habit to try", [])
+               if line.startswith("- [ ] ")]
     # "Comment X / DM me / link in bio" are ways to reach the creator: Claude can't do
     # them, so they go into a separate "backup" part instead of the actions.
     all_points = [line.lstrip("- ") for line in s.get("Key points", [])]
     offers = list(dict.fromkeys(
         [line[len("- Offer: "):] for line in s.get("From the creator", [])
          if line.startswith("- Offer: ")]
-        + creator_offers(open_actions + all_points)))
-    open_actions = [a for a in open_actions if not LOW_PRIORITY_RE.search(a)]
-    summary = " ".join(s.get("Summary", []))
-    key_points = [k for k in all_points if not LOW_PRIORITY_RE.search(k)][:7]
-    resources = [line.lstrip("- ") for line in s.get("Resources", [])][:8]
-    claims = [line.lstrip("- ").replace("⚠️ ", "") for line in s.get("Claims to check", [])]
+        + creator_offers(actions + all_points)))
+    return {
+        "title": s["title"], "category": s.get("category", "other"),
+        "source": s.get("source", ""), "creator": s.get("creator", ""),
+        "summary": " ".join(s.get("Summary", [])),
+        "actions": [a for a in actions if not LOW_PRIORITY_RE.search(a)],
+        "key_points": [k for k in all_points if not LOW_PRIORITY_RE.search(k)],
+        "resources": [plan_resource(line.lstrip("- ")) for line in s.get("Resources", [])],
+        "claims": [line.lstrip("- ").replace("⚠️ ", "") for line in s.get("Claims to check", [])],
+        "offers": offers,
+    }
 
-    out = [f"ACT AS: {ACT_AS.get(category, 'a helpful expert assistant')}.", "",
-           f"REQUEST: Help me act on what I learned from a short video: \"{s['title']}\"."]
-    if summary:
-        out.append(f"What it was about: {summary}")
+
+def plan_resource(line: str) -> str:
+    """Shorter resource line for plans: search links and long descriptions removed
+    (Claude can find a tool by name). Real links, stars and ⚠️ warnings stay."""
+    line = re.sub(r"\s*https://(?:www\.google\.com|github\.com)/search\?\S+", "", line)
+    return re.sub(r"\s+—\s.*$", "", line).strip()
+
+
+PLAN_CONSTRAINTS = [
+    "- First check that each tool or link is real, current and safe to use; "
+    "tell me if something looks outdated, unsafe or like a scam.",
+    "- Prefer official sources (GitHub repos, official docs) over the video's claims."]
+PLAN_FOOTER = ["- I use Windows. Give exact commands I can copy.",
+               "- Use simple English (English is not my first language).",
+               "- Ask me before installing anything or changing my files or accounts."]
+
+
+def make_plan(path: Path | list[Path], my_goal: str = "") -> str:
+    """A prompt in ART format (Act as / Request / Terms: Instructions, Constraints,
+    Output) built ONLY from the notes' own content — no AI, so nothing is invented.
+    Give one note, or a list of notes for ONE combined plan."""
+    paths = path if isinstance(path, list) else [path]
+    if len(paths) > 1:
+        return make_combined_plan(paths, my_goal)
+    n = plan_parts(paths[0])
+    out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
+           f"REQUEST: Help me act on what I learned from a short video: \"{n['title']}\"."]
+    if n["summary"]:
+        out.append(f"What it was about: {n['summary']}")
     if my_goal:
         out.append(f"My goal: {my_goal}")
     out += ["", "TERMS", "", "Instructions:"]
-    if open_actions:
+    if n["actions"]:
         out.append("Help me complete these actions, in a sensible order:")
-        out += [f"{i}. {a}" for i, a in enumerate(open_actions, 1)]
+        out += [f"{i}. {a}" for i, a in enumerate(n["actions"], 1)]
     else:
         out.append("Suggest 3-5 practical actions I can take from this video, then help me do them.")
-    if key_points:
-        out += ["", "What the video said (key points):"] + [f"- {k}" for k in key_points]
-    if resources:
-        out += ["", "Tools and links from the video:"] + [f"- {r}" for r in resources]
-    out += ["", "Constraints:",
-            "- First check that each tool or link is real, current and safe to use; "
-            "tell me if something looks outdated, unsafe or like a scam.",
-            "- Prefer official sources (GitHub repos, official docs) over the video's claims."]
-    out += [f"- Verify this claim before relying on it: {c}" for c in claims]
-    out += ["- I use Windows. Give exact commands I can copy.",
-            "- Use simple English (English is not my first language).",
-            "- Ask me before installing anything or changing my files or accounts."]
+    if n["key_points"]:
+        out += ["", "What the video said (key points):"] + [f"- {k}" for k in n["key_points"][:7]]
+    if n["resources"]:
+        out += ["", "Tools and links from the video:"] + [f"- {r}" for r in n["resources"][:8]]
+    out += ["", "Constraints:"] + PLAN_CONSTRAINTS
+    out += [f"- Verify this claim before relying on it: {c}" for c in n["claims"]]
+    out += PLAN_FOOTER
     out += ["", "Output:",
             "- A step-by-step plan: for each step, what to do, why, and how long it takes.",
             "- Exact commands or settings where needed.",
             "- A short checklist at the end that I can tick off."]
-    if offers or s.get("creator"):
+    if n["offers"] or n["creator"]:
         out += ["", "Backup if a link above is wrong, missing or dead:"]
-        if s.get("creator"):
-            out.append(f"- The video's creator: {s['creator']}")
-        out += [f"- The creator offered: {o}" for o in offers]
+        if n["creator"]:
+            out.append(f"- The video's creator: {n['creator']}")
+        out += [f"- The creator offered: {o}" for o in n["offers"]]
         out.append("- Tell me if I should ask the creator for the correct link.")
-    if s.get("source"):
-        out += ["", f"(Source video: {s['source']})"]
+    if n["source"]:
+        out += ["", f"(Source video: {n['source']})"]
+    return "\n".join(out)
+
+
+MAX_PLAN_NOTES = 5
+
+
+def make_combined_plan(paths: list[Path], my_goal: str = "") -> str:
+    """One plan from several notes: overlapping steps merged, one order across videos."""
+    notes = [plan_parts(p) for p in paths[:MAX_PLAN_NOTES]]
+    cats = [n["category"] for n in notes]
+    category = max(set(cats), key=cats.count)          # the most common category
+    out = [f"ACT AS: {ACT_AS.get(category, 'a helpful expert assistant')}.", "",
+           f"REQUEST: Help me act on what I learned from {len(notes)} short videos, "
+           "as ONE combined plan."]
+    if my_goal:
+        out.append(f"My goal: {my_goal}")
+    out += ["", "TERMS", "", "Instructions:",
+            "- Merge actions that overlap (do them once), and put everything in a sensible "
+            "order across all the videos.",
+            "- Say which video (V1, V2...) each step comes from.",
+            "- If two videos disagree, tell me and recommend one."]
+    for i, n in enumerate(notes, 1):
+        out += ["", f"V{i}: \"{n['title']}\""]
+        if n["summary"]:
+            out.append(f"About: {n['summary']}")
+        if n["actions"]:
+            out.append("Actions:")
+            out += [f"- {a}" for a in n["actions"]]
+        if n["key_points"]:
+            out.append("Key points:")
+            out += [f"- {k}" for k in n["key_points"][:4]]
+        if n["resources"]:
+            out.append("Tools and links:")
+            out += [f"- {r}" for r in n["resources"][:5]]
+    claims = [(i, c) for i, n in enumerate(notes, 1) for c in n["claims"]]
+    out += ["", "Constraints:"] + PLAN_CONSTRAINTS
+    out += [f"- Verify this claim (V{i}) before relying on it: {c}" for i, c in claims]
+    out += PLAN_FOOTER
+    out += ["", "Output:",
+            "- One step-by-step plan: for each step, what to do, why, which video it's "
+            "from, and how long it takes.",
+            "- Exact commands or settings where needed.",
+            "- A short checklist at the end that I can tick off."]
+    backup = [(i, n) for i, n in enumerate(notes, 1) if n["creator"] or n["offers"]]
+    if backup:
+        out += ["", "Backup if a link above is wrong, missing or dead:"]
+        for i, n in backup:
+            who = n["creator"] or "the creator"
+            offers = "; ".join(n["offers"])
+            out.append(f"- V{i} creator: {who}" + (f" (offered: {offers})" if offers else ""))
+        out.append("- Tell me if I should ask a creator for the correct link.")
+    sources = [f"V{i}: {n['source']}" for i, n in enumerate(notes, 1) if n["source"]]
+    if sources:
+        out += ["", "(Source videos: " + " · ".join(sources) + ")"]
     return "\n".join(out)
 
 
