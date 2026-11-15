@@ -77,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /remind 3 friday  /nudge  /stats\n"
+        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
@@ -360,7 +360,10 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
     page = max(1, min(page, pages))
     shown = items[(page - 1) * TODO_PAGE_SIZE: page * TODO_PAGE_SIZE]
 
-    headings = {"high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL", "low": "🔽 LOW"}
+    headings = {"due": "⏰ DUE SOON", "high": "🔥 HIGH PRIORITY", "normal": "▫️ NORMAL",
+                "low": "🔽 LOW"}
+    def group(a):
+        return "due" if processor.is_due_soon(a) else a["priority"]
     reminded = {r["action_id"] for r in processor.load_reminders()}
     counts = {lv: sum(a["priority"] == lv for _, a in all_actions) for lv in LEVELS}
     what = f"{level} priority " if level else ""
@@ -369,15 +372,17 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
              f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low"]
     current_priority, current_title = None, None
     for n, a in shown:
-        if a["priority"] != current_priority:   # priority section
-            current_priority, current_title = a["priority"], None
-            lines += ["", f"━━ {headings[a['priority']]} ━━"]
+        if group(a) != current_priority:        # due-soon / priority section
+            current_priority, current_title = group(a), None
+            lines += ["", f"━━ {headings[current_priority]} ━━"]
         if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
             lines += [f"📌 {current_title}"]
         bell = " 🔔" if processor.action_id(a) in reminded else ""
-        lines.append(f"{n}. ☐ {a['action']}{bell}")
-    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /remind 3 friday",
+        due = f"  {processor.due_label(a['due'])}" if a["due"] else ""
+        icon = processor.PRIORITY_ICON[a["priority"]] if group(a) == "due" else ""
+        lines.append(f"{n}. ☐ {icon}{a['action']}{due}{bell}")
+    lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /due 3 friday · /remind 3 friday",
               "Only 🔥 ones: /todo high"]
 
     keyboard = None
@@ -391,6 +396,19 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
             row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
         keyboard = InlineKeyboardMarkup([row])
     return "\n".join(lines)[:4000], keyboard
+
+
+def due_text() -> str:
+    """Overdue + due this week, for the weekly review ('' if nothing has a date)."""
+    overdue, coming = processor.dated_actions()
+    lines = []
+    if overdue:
+        lines += ["", f"⚠️ {len(overdue)} overdue:"]
+        lines += [f"{n}. {a['action']} ({a['due']:%a %d %b})" for n, a in overdue]
+    if coming:
+        lines += ["", f"📅 Due this week ({len(coming)}):"]
+        lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}" for n, a in coming]
+    return "\n".join(lines)
 
 
 def actions_text() -> str:
@@ -473,6 +491,50 @@ async def change_priority(update: Update, context: ContextTypes.DEFAULT_TYPE,
     reply = [f"{icon} Now {level} priority:", *[f"• {t}" for t in changed], "",
              "The list order has changed, so send /todo before your next command."]
     await update.message.reply_text("\n".join(reply))
+
+
+async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/due 3 friday · /due 2 5 20/11 · /due 3 off · /due (list dated actions)."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    numbers = []
+    while args and args[0].isdigit():
+        numbers.append(int(args.pop(0)))
+    when = " ".join(args).strip()
+    if not numbers:
+        overdue, coming = processor.dated_actions()
+        later = [(n, a) for n, a in enumerate(processor.open_actions(), start=1)
+                 if a["due"] and (n, a) not in overdue and (n, a) not in coming]
+        if not (overdue or coming or later):
+            await update.message.reply_text(
+                "No actions have a due date yet.\nAdd one: /due 3 friday  (see numbers in /todo)")
+            return
+        lines = ["📅 Actions with a due date:"]
+        lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}"
+                  for n, a in overdue + coming + later]
+        await update.message.reply_text("\n".join(lines)[:4000])
+        return
+    if not when:
+        await update.message.reply_text("When is it due? e.g. /due 3 friday, /due 3 20/11, "
+                                        "/due 3 in 5 days. Remove it: /due 3 off")
+        return
+    if when.lower() in ("off", "none", "clear", "remove"):
+        changed = processor.set_due(numbers, None)
+        msg = "🗑 Removed the due date from:" if changed else "No action with that number."
+    else:
+        day = processor.parse_due(when)
+        if day is None:
+            await update.message.reply_text(
+                f"I don't understand “{when}” (or it's in the past). Try: friday, tomorrow, "
+                "next week, in 3 days, 20/11, 2026-11-20")
+            return
+        changed = processor.set_due(numbers, day)
+        msg = f"📅 Due {processor.due_label(day)[2:]}:" if changed else "No action with that number."
+    lines = [msg] + [f"• {t}" for t in changed]
+    if changed:
+        lines.append("\nNumbers in /todo may change (due-soon actions move to the top).")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def high(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -772,7 +834,8 @@ NUDGE_TIME = os.getenv("NUDGE_TIME", "08:00").strip().lower()   # "off" to disab
 
 def nudge_message(action: dict, intro: str) -> tuple[str, InlineKeyboardMarkup]:
     icon = processor.PRIORITY_ICON[action["priority"]]
-    text = f"{intro}\n\n{icon}{action['action']}\n\n📌 From: {action['title']}"
+    due = f"\n{processor.due_label(action['due'])}" if action.get("due") else ""
+    text = f"{intro}\n\n{icon}{action['action']}{due}\n\n📌 From: {action['title']}"
     aid = processor.action_id(action)
     buttons = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
@@ -1079,7 +1142,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=context.job.chat_id,
-        text=("📅 Weekly review\n\n" + stats_text() + "\n\n" + actions_text())[:4000],
+        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],
     )
 
 
@@ -1124,6 +1187,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("redo", redo))
+    app.add_handler(CommandHandler("due", due))
     app.add_handler(CallbackQueryHandler(redo_button_pressed, pattern=r"^redo:"))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("update", update_cmd))

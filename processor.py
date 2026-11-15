@@ -842,10 +842,90 @@ def open_actions() -> list[dict]:
             # Only real action items count, not "- [ ]" text inside a transcript/caption
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 priority, text = split_priority(line[6:].strip())
+                text, due = split_due(text)
                 results.append({"path": note, "line": i, "title": title,
-                                "action": text, "priority": priority})
-    results.sort(key=lambda a: PRIORITY_ORDER[a["priority"]])  # stable: keeps note order
+                                "action": text, "priority": priority, "due": due})
+    today = date.today()
+    # Due soon (overdue, today, next 2 days) first, soonest first; then by priority.
+    # sort() is stable, so notes keep their order inside each group.
+    results.sort(key=lambda a: (0, a["due"]) if is_due_soon(a, today)
+                 else (1, date.max, PRIORITY_ORDER[a["priority"]]))
     return results
+
+
+# ---- Due dates (Obsidian Tasks style: "📅 2026-11-20" at the end) -------------
+
+DUE_RE = re.compile(r"\s*📅\s*(\d{4}-\d{2}-\d{2})\s*$")
+DUE_SOON_DAYS = 2
+
+
+def split_due(text: str) -> tuple[str, date | None]:
+    m = DUE_RE.search(text)
+    if not m:
+        return text, None
+    try:
+        return text[:m.start()].rstrip(), date.fromisoformat(m.group(1))
+    except ValueError:
+        return text, None
+
+
+def is_due_soon(action: dict, today: date | None = None) -> bool:
+    due = action.get("due")
+    return bool(due) and due <= (today or date.today()) + timedelta(days=DUE_SOON_DAYS)
+
+
+def todo_line(action: dict, priority: str | None = None, due: date | None | str = "keep") -> str:
+    """Rebuild a '- [ ]' line, keeping (or changing) the priority and due date."""
+    due = action.get("due") if due == "keep" else due
+    line = "- [ ] " + PRIORITY_ICON[priority or action["priority"]] + action["action"]
+    return line + (f" 📅 {due:%Y-%m-%d}" if due else "")
+
+
+def due_label(due: date | None, today: date | None = None) -> str:
+    """'⚠️ overdue (Mon 17 Nov)', '📅 today', '📅 tomorrow', '📅 Fri 20 Nov'."""
+    if not due:
+        return ""
+    today = today or date.today()
+    if due < today:
+        return f"⚠️ overdue ({due:%a %d %b})"
+    if due == today:
+        return "📅 today"
+    if due == today + timedelta(days=1):
+        return "📅 tomorrow"
+    return f"📅 {due:%a %d %b}"
+
+
+def set_due(numbers: list[int], due: date | None) -> list[str]:
+    """Set (or clear, with due=None) the due date of actions by their /todo number."""
+    actions = open_actions()
+    chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
+    for a in chosen:
+        lines = a["path"].read_text(encoding="utf-8").splitlines()
+        lines[a["line"]] = todo_line(a, due=due)
+        a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [a["action"] for a in chosen]
+
+
+def parse_due(text: str, today: date | None = None) -> date | None:
+    """'friday', 'tomorrow', 'in 3 days', '20/11', 'next week' → a date (not in the past)."""
+    today = today or date.today()
+    now = datetime.combine(today, datetime.min.time())     # midnight: 'friday' = this Friday
+    when = parse_when(text, now)
+    if when is None or when.date() < today:
+        return None
+    return when.date()
+
+
+def dated_actions(today: date | None = None) -> tuple[list, list]:
+    """(overdue, due in the next 7 days) as (/todo number, action) pairs."""
+    today = today or date.today()
+    overdue, coming = [], []
+    for n, a in enumerate(open_actions(), start=1):
+        if a["due"] and a["due"] < today:
+            overdue.append((n, a))
+        elif a["due"] and a["due"] <= today + timedelta(days=7):
+            coming.append((n, a))
+    return overdue, coming
 
 
 def set_priority(numbers: list[int], level: str) -> list[str]:
@@ -854,7 +934,7 @@ def set_priority(numbers: list[int], level: str) -> list[str]:
     chosen = [actions[n - 1] for n in sorted(set(numbers)) if 1 <= n <= len(actions)]
     for a in chosen:
         lines = a["path"].read_text(encoding="utf-8").splitlines()
-        lines[a["line"]] = "- [ ] " + PRIORITY_ICON[level] + a["action"]
+        lines[a["line"]] = todo_line(a, priority=level)
         a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
     return [a["action"] for a in chosen]
 
@@ -1111,9 +1191,14 @@ def pick_nudge(after: str | None = None, today: date | None = None) -> dict | No
         ids = [action_id(a) for a in actions]
         i = ids.index(after) + 1 if after in ids else 0
         return actions[i % len(actions)]
+    today = today or date.today()
+    due_now = [a for a in actions if a["due"] and a["due"] <= today]
+    if due_now:                     # overdue / due today beats everything
+        return due_now[0]
     top = actions[0]["priority"]
-    bucket = [a for a in actions if a["priority"] == top]
-    day = (today or date.today()).toordinal()
+    bucket = [a for a in actions if a["priority"] == top and not a["due"]] or \
+        [a for a in actions if a["priority"] == top]
+    day = today.toordinal()
     return bucket[day % len(bucket)]
 
 

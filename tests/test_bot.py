@@ -312,3 +312,34 @@ def test_download_gives_clear_error(tmp_path, monkeypatch):
     async def get_file(**k): raise TimedOut()
     with pytest.raises(RuntimeError, match="timed out 3 times"):
         asyncio.run(bot.download(types.SimpleNamespace(get_file=get_file), tmp_path / "a.jpg"))
+
+
+def run_due(text, monkeypatch):
+    msg = FakeMessage(text)
+    upd = types.SimpleNamespace(message=msg, effective_user=types.SimpleNamespace(id=1))
+    ctx = types.SimpleNamespace(args=text.split()[1:])
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    asyncio.run(bot.due(upd, ctx))
+    return msg.replies[-1]
+
+
+def test_due_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    (tmp_path / "a.md").write_text("# A\n\n## Action items\n- [ ] Learn Pandas\n", encoding="utf-8")
+    assert "No actions have a due date" in run_due("/due", monkeypatch)
+    assert "Learn Pandas" in run_due("/due 1 in 3 days", monkeypatch)
+    assert "📅" in (tmp_path / "a.md").read_text(encoding="utf-8")
+    assert "Learn Pandas" in run_due("/due", monkeypatch)
+    assert "don't understand" in run_due("/due 1 banana", monkeypatch)
+    assert "Removed" in run_due("/due 1 off", monkeypatch)
+    assert "/due" in first_matching_handler("/due 1 friday") or first_matching_handler("/due 1 friday") == "due"
+
+
+def test_todo_shows_due_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    (tmp_path / "a.md").write_text("# A\n\n## Action items\n- [ ] 🔥 Big\n- [ ] Late 📅 2020-01-01\n",
+                                   encoding="utf-8")
+    text, _ = bot.todo_page(1)
+    assert text.index("DUE SOON") < text.index("HIGH PRIORITY")
+    assert "1. ☐ Late  ⚠️ overdue" in text
+    assert "overdue" in bot.due_text()
