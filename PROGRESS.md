@@ -1,37 +1,12 @@
-# Progress - Creator info + GitHub repo check
-Branch: feature/creator-and-repo-check
-Last updated: 2026-11-15 01:04 (Hobart)
-
-## Plan
-1. Save the creator (name, @handle, profile link) and a "From the creator" section with their offers (comment X, DM, link in bio); better promo filter; /plan puts offers in a "Backup if a link is wrong" part
-2. Repo check: for GitHub links, show last update, licence, archived, and "not found" warnings
-3. README
+# Progress - Photo timeout fix, due dates, /plan for several notes
+Branch: feature/due-dates-and-multi-plan
+Last updated: 2026-11-15 22:40 (Hobart)
 
 ## Done
-- Step 1: creator_from_info() from yt-dlp (uploader, uploader_id, uploader_url); "- Creator:" line in the note header; "## From the creator" section with offers (nothing deleted: offers stay as 🔽 low actions too); promo filter now catches 'MEMORY' in single quotes, CAPS keywords, "follow for more", "link in bio" but not "add a comment to your code" or "follow the instructions"; /plan moves offers + creator into a backup part (13 new tests)
-
-- Step 2: GitHub repo health (last update, archived, licence, not found). Step 3: README section
-
-- Fix: GitHub search only when the video talks about code
-
-- Screenshots → notes (albums = one note); qwen3:8b default with thinking off; roadmap courses no longer get GitHub repos
-
-- #20 /redo (old note to old/ folder), #19 nightly yt-dlp update + /update, #18 /health
-
-## In progress
-- (none)
+- Step 1: fix "Timed out" on photos (longer Telegram timeouts + 3 download retries)
 
 ## Next step
-- Nothing; waiting for merge
+- Step 2: due dates on actions (/due 3 friday), shown in /todo, nudge, weekly review
 
 ## Decisions
-- /redo moves the old note to NOTES_DIR/old instead of deleting it (private data, can be restored)
-- Plain 'GitHub' in a roadmap isn't a code hint; course/docs/tutorial names never searched on GitHub
-- Common words (Settings, Muse) matched random popular repos; now a code hint (GitHub, open source, install command...) is needed
-- Rate limits (403) are not treated as 'not found', so a busy API never shows a false warning
-- Nothing about the creator is ever removed from a note: offers are kept as low actions AND listed under "From the creator". Only the Claude prompt (/plan) moves them to a backup part, because Claude can't comment on Instagram.
-- Instagram sometimes gives a number instead of a username: numbers are not shown as @handle.
-- Old notes have no Creator line (it wasn't saved before); new notes will.
-
-## Problems / questions for the user
-- (none yet)
+- OCR of the accent image works; the error was Telegram's 5 s download limit

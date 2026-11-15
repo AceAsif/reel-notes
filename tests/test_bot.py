@@ -211,8 +211,8 @@ class FakeShot:
     def __init__(self, caption=""):
         self.caption, self.document, self.replies = caption, None, []
         self.photo = [types.SimpleNamespace(get_file=self._file)]
-    async def _file(self):
-        async def dl(path): Path(path).write_bytes(b"x")
+    async def _file(self, **k):
+        async def dl(path, **k): Path(path).write_bytes(b"x")
         return types.SimpleNamespace(download_to_drive=dl)
     async def reply_text(self, t):
         self.replies.append(t)
@@ -283,3 +283,32 @@ def test_redo_failure_restores_old(tmp_path, monkeypatch):
 def test_redo_cancel(tmp_path, monkeypatch):
     note, edits = run_redo_button(tmp_path, monkeypatch, "redo:no", True)
     assert note.exists() and "kept" in edits[0]
+
+
+_real_sleep = asyncio.sleep
+
+
+async def _no_wait(s):
+    await _real_sleep(0)
+
+
+def test_download_retries_then_works(tmp_path, monkeypatch):
+    from telegram.error import TimedOut
+    monkeypatch.setattr(bot.asyncio, "sleep", _no_wait)
+    tries = []
+    async def get_file(**k):
+        tries.append(1)
+        if len(tries) < 3:
+            raise TimedOut()
+        async def dl(path, **k): Path(path).write_bytes(b"x")
+        return types.SimpleNamespace(download_to_drive=dl)
+    asyncio.run(bot.download(types.SimpleNamespace(get_file=get_file), tmp_path / "a.jpg"))
+    assert len(tries) == 3 and (tmp_path / "a.jpg").exists()
+
+
+def test_download_gives_clear_error(tmp_path, monkeypatch):
+    from telegram.error import TimedOut
+    monkeypatch.setattr(bot.asyncio, "sleep", _no_wait)
+    async def get_file(**k): raise TimedOut()
+    with pytest.raises(RuntimeError, match="timed out 3 times"):
+        asyncio.run(bot.download(types.SimpleNamespace(get_file=get_file), tmp_path / "a.jpg"))

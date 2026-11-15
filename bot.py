@@ -104,8 +104,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         with tempfile.TemporaryDirectory() as tmp:
             video_path = Path(tmp) / "reel.mp4"
-            tg_file = await media.get_file()
-            await tg_file.download_to_drive(video_path)
+            await download(media, video_path)
             # Heavy work runs in a thread so the bot stays responsive
             note_path, data = await asyncio.to_thread(
                 processor.process_video, video_path, msg.caption or ""
@@ -115,6 +114,20 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await status.edit_text(format_reply(data, note_path))
+
+
+async def download(media, path: Path, tries: int = 3) -> None:
+    """Download a Telegram photo/video, retrying when the connection is slow."""
+    for attempt in range(1, tries + 1):
+        try:
+            tg_file = await media.get_file(read_timeout=60)
+            await tg_file.download_to_drive(path, read_timeout=120)
+            return
+        except (TimedOut, NetworkError):
+            if attempt == tries:
+                raise RuntimeError("Telegram download timed out 3 times. "
+                                   "Check your internet and send it again.")
+            await asyncio.sleep(3 * attempt)
 
 
 # ---- Screenshots → notes -------------------------------------------------
@@ -163,7 +176,7 @@ async def process_screenshots(msgs: list) -> None:
                 media = m.photo[-1] if m.photo else m.document   # biggest photo size
                 ext = Path(getattr(media, "file_name", "") or "x.jpg").suffix or ".jpg"
                 path = Path(tmp) / f"shot{i}{ext.lower()}"
-                await (await media.get_file()).download_to_drive(path)
+                await download(media, path)
                 paths.append(path)
             note_path, data = await asyncio.to_thread(
                 processor.process_videos, paths, source, caption)
@@ -1084,7 +1097,12 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_app() -> Application:
     """Create the bot with all its commands and scheduled jobs (doesn't start it)."""
-    app = Application.builder().token(TOKEN).build()
+    # Telegram's default 5-second limit is too short for photos/videos on a slow
+    # connection ("Timed out"), so give downloads and uploads more time.
+    app = (Application.builder().token(TOKEN)
+           .connect_timeout(20).read_timeout(60).write_timeout(60)
+           .media_write_timeout(120).pool_timeout(20)
+           .build())
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
