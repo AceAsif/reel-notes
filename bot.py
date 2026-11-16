@@ -18,6 +18,7 @@ from telegram.constants import ChatAction  # noqa: E402
 from telegram.error import NetworkError, TimedOut  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
@@ -107,8 +108,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await download(media, video_path)
             # Heavy work runs in a thread so the bot stays responsive
             note_path, data = await asyncio.to_thread(
-                processor.process_video, video_path, msg.caption or ""
-            )
+                processor.process_videos, [video_path],
+                link.group(0) if link else "", msg.caption or "")
     except Exception as exc:  # show the error so you can fix it
         await status.edit_text(f"❌ Something went wrong: {exc}")
         return
@@ -350,6 +351,8 @@ LEVELS = ("high", "normal", "low")
 def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
     """One page of /todo (10 actions). Numbers are the real /todo numbers, so
     /done 23 works from any page. level='high' shows only 🔥 actions."""
+    if not processor.notes_ready():
+        return processor.NOTES_MISSING, None
     all_actions = list(enumerate(processor.open_actions(), start=1))
     if not all_actions:
         return "🎉 No open action items.", None
@@ -735,8 +738,10 @@ async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """/notes shows your 10 newest notes."""
     if not is_allowed(update):
         return
-    files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10] \
-        if processor.NOTES_DIR.exists() else []
+    if not processor.notes_ready():
+        await update.message.reply_text(processor.NOTES_MISSING)
+        return
+    files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10]
     if not files:
         await update.message.reply_text("No notes yet. Send me a reel!")
         return
@@ -865,6 +870,9 @@ def nudge_message(action: dict, intro: str) -> tuple[str, InlineKeyboardMarkup]:
 
 
 async def send_nudge(bot, chat_id: int, intro: str) -> None:
+    if not processor.notes_ready():
+        await bot.send_message(chat_id, processor.NOTES_MISSING)
+        return
     action = processor.pick_nudge()
     if action is None:
         await bot.send_message(chat_id, "🎉 No open actions. Send me a reel to get new ideas!")
@@ -1165,6 +1173,11 @@ async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def ignore_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Editing an old message in Telegram must not run its command again."""
+    raise ApplicationHandlerStop
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Short one-line log for Telegram hiccups (Bad Gateway, timeouts);
     full details only for real bugs. The bot keeps running either way."""
@@ -1186,6 +1199,7 @@ def build_app() -> Application:
            .media_write_timeout(120).pool_timeout(20)
            .build())
     app.add_error_handler(on_error)
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, ignore_edited), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("done", done))

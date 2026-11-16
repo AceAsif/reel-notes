@@ -6,3 +6,6 @@ cookies.txt
 bot.log
 .pytest_cache/
 reminders.json
+
+*.redo
+*.log
