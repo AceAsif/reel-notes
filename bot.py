@@ -907,7 +907,9 @@ async def send_nudge(bot, chat_id: int, intro: str) -> None:
 
 
 async def daily_nudge(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_nudge(context.bot, context.job.chat_id, "☀️ Good morning! Today's one action:")
+    late = datetime.datetime.now(TIMEZONE).hour >= 12      # sent late: the PC was off
+    await send_nudge(context.bot, context.job.chat_id,
+                     "🎯 Today's one action:" if late else "☀️ Good morning! Today's one action:")
 
 
 async def nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1201,6 +1203,65 @@ async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+# ---- scheduled messages, with catch-up ------------------------------------------
+# The PC is not always on (or awake) at 8:00. So every scheduled message goes through
+# run_due_jobs: it checks what should have been sent by now and sends what is missing.
+# It runs at the exact times, shortly after the bot starts, and every few minutes.
+
+CATCH_UP_EVERY = 300          # seconds between checks
+_jobs_lock = asyncio.Lock()
+
+
+def clock(text: str, name: str) -> tuple[int, int] | None:
+    """'08:00' → (8, 0). 'off' or a wrong value → None."""
+    if text == "off":
+        return None
+    try:
+        hour, minute = (int(x) for x in text.split(":"))
+        datetime.time(hour, minute)
+        return hour, minute
+    except ValueError:
+        print(f"{name}={text!r} isn't HH:MM, so it is turned off")
+        return None
+
+
+def job_rules() -> dict:
+    """When each scheduled message goes out (weekday: Monday = 0 ... Sunday = 6)."""
+    rules = {}
+    if clock(NUDGE_TIME, "NUDGE_TIME"):
+        rules["nudge"] = {"every": "day", "at": clock(NUDGE_TIME, "NUDGE_TIME")}
+    rules["weekly"] = {"every": "week", "weekday": 6, "at": (9, 0)}          # Sunday 9:00 am
+    if RESURFACE != "off":
+        rules["resurface"] = {"every": "week", "weekday": 2, "at": (19, 0)}  # Wednesday 7:00 pm
+    rules["monthly"] = {"every": "month", "day": 1, "at": (9, 30)}           # 1st, 9:30 am
+    if clock(YTDLP_UPDATE_TIME, "YTDLP_UPDATE_TIME"):                         # last: it is slow
+        rules["ytdlp"] = {"every": "day", "at": clock(YTDLP_UPDATE_TIME, "YTDLP_UPDATE_TIME")}
+    return rules
+
+
+JOB_SENDERS = {"nudge": daily_nudge, "weekly": weekly_digest, "resurface": weekly_resurface,
+               "monthly": monthly_summary, "ytdlp": daily_ytdlp_update}
+
+
+async def run_due_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send every scheduled message that is due and not sent yet (see above)."""
+    async with _jobs_lock:                       # two checks at once must not send twice
+        sent = processor.load_sent_jobs()
+        before = dict(sent)
+        due = processor.due_jobs(datetime.datetime.now(TIMEZONE), sent, job_rules())
+        if sent != before:
+            processor.save_sent_jobs(sent)       # first run: remember, send nothing
+        if not processor.notes_ready():          # Google Drive not started yet: try again later
+            due = [(kind, slot) for kind, slot in due if kind == "ytdlp"]
+        for kind, slot in due:
+            try:
+                await JOB_SENDERS[kind](context)
+            except (NetworkError, TimedOut):
+                return                           # no internet yet: the next check sends it
+            sent[kind] = slot
+            processor.save_sent_jobs(sent)
+
+
 async def ignore_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Editing an old message in Telegram must not run its command again."""
     raise ApplicationHandlerStop
@@ -1271,42 +1332,16 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(resurface_button_pressed, pattern=r"^resurf:"))
 
     if ALLOWED_USER_ID:
-        # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)
-        app.job_queue.run_daily(
-            weekly_digest,
-            time=datetime.time(9, 0, tzinfo=TIMEZONE),
-            days=(0,),
-            chat_id=int(ALLOWED_USER_ID),
-        )
-        # Every day at NUDGE_TIME (default 08:00): one action to do today
-        if NUDGE_TIME != "off":
-            try:
-                hour, minute = (int(x) for x in NUDGE_TIME.split(":"))
-                app.job_queue.run_daily(
-                    daily_nudge,
-                    time=datetime.time(hour, minute, tzinfo=TIMEZONE),
-                    chat_id=int(ALLOWED_USER_ID),
-                )
-            except ValueError:
-                print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
-
-        # Wednesday 7:00 pm: one older note to remember (0 = Sunday, so 3 = Wednesday)
-        if RESURFACE != "off":
-            app.job_queue.run_daily(weekly_resurface,
-                                    time=datetime.time(19, 0, tzinfo=TIMEZONE),
-                                    days=(3,), chat_id=int(ALLOWED_USER_ID))
-        # 1st of every month, 9:30 am: summary of the previous month
-        app.job_queue.run_monthly(monthly_summary, when=datetime.time(9, 30, tzinfo=TIMEZONE),
-                                  day=1, chat_id=int(ALLOWED_USER_ID))
-        # Every night at YTDLP_UPDATE_TIME (default 03:30): keep yt-dlp fresh
-        if YTDLP_UPDATE_TIME != "off":
-            try:
-                hour, minute = (int(x) for x in YTDLP_UPDATE_TIME.split(":"))
-                app.job_queue.run_daily(daily_ytdlp_update,
-                                        time=datetime.time(hour, minute, tzinfo=TIMEZONE),
-                                        chat_id=int(ALLOWED_USER_ID))
-            except ValueError:
-                print(f"YTDLP_UPDATE_TIME={YTDLP_UPDATE_TIME!r} isn't HH:MM, auto-update disabled")
+        chat_id = int(ALLOWED_USER_ID)
+        # Daily nudge, Sunday review, Wednesday "remember this?", monthly summary and the
+        # yt-dlp update all run through run_due_jobs: at their exact time, 20 seconds after
+        # the bot starts, and every 5 minutes. A message missed while the PC was off or
+        # asleep is sent as soon as the PC is back.
+        for rule in job_rules().values():
+            app.job_queue.run_daily(run_due_jobs, chat_id=chat_id,
+                                    time=datetime.time(*rule["at"], tzinfo=TIMEZONE))
+        app.job_queue.run_repeating(run_due_jobs, interval=CATCH_UP_EVERY, first=20,
+                                    chat_id=chat_id)
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))

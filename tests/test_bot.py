@@ -443,3 +443,50 @@ def test_done_uses_numbers_from_last_todo(tmp_path, monkeypatch):
     upd = update()                                            # number 1 is gone now
     asyncio.run(bot.done(upd, context))
     assert "No matching numbers" in upd.message.replies[-1]
+
+
+# ---- catch-up of scheduled messages ------------------------------------------------
+
+def catch_up_setup(tmp_path, monkeypatch, sent):
+    monkeypatch.setattr(bot.processor, "SENT_JOBS_FILE", tmp_path / "sent.json")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    monkeypatch.setattr(bot, "job_rules", lambda: {"nudge": {"every": "day", "at": (0, 0)}})
+    bot.processor.save_sent_jobs(sent)
+    calls = []
+    async def fake_nudge(context): calls.append("nudge")
+    monkeypatch.setitem(bot.JOB_SENDERS, "nudge", fake_nudge)
+    return calls
+
+
+def test_missed_nudge_is_sent_once(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {"nudge": "2000-01-01"})
+    asyncio.run(bot.run_due_jobs(None))
+    asyncio.run(bot.run_due_jobs(None))                  # the next check must not repeat it
+    assert calls == ["nudge"]
+
+
+def test_first_run_sends_nothing(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {})
+    asyncio.run(bot.run_due_jobs(None))
+    assert calls == [] and "nudge" in bot.processor.load_sent_jobs()
+
+
+def test_catch_up_waits_for_notes_folder_and_internet(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {"nudge": "2000-01-01"})
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path / "drive-not-started")
+    asyncio.run(bot.run_due_jobs(None))
+    assert calls == []                                   # waits: Google Drive is not up yet
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    async def offline(context): raise bot.NetworkError("no internet")
+    monkeypatch.setitem(bot.JOB_SENDERS, "nudge", offline)
+    asyncio.run(bot.run_due_jobs(None))
+    assert bot.processor.load_sent_jobs()["nudge"] == "2000-01-01"   # not marked: tried again later
+
+
+def test_job_rules_follow_settings(monkeypatch):
+    monkeypatch.setattr(bot, "NUDGE_TIME", "off")
+    monkeypatch.setattr(bot, "RESURFACE", "off")
+    monkeypatch.setattr(bot, "YTDLP_UPDATE_TIME", "25:99")          # wrong value = off
+    assert set(bot.job_rules()) == {"weekly", "monthly"}
+    monkeypatch.setattr(bot, "NUDGE_TIME", "07:30")
+    assert bot.job_rules()["nudge"] == {"every": "day", "at": (7, 30)}

@@ -9,3 +9,4 @@ reminders.json
 
 *.redo
 *.log
+sent_jobs.json

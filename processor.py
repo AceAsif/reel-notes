@@ -1531,6 +1531,67 @@ def remove_reminder(aid: str) -> bool:
     return len(kept) != len(reminders)
 
 
+# ---- catch-up: scheduled messages missed while the PC was off or asleep -----------
+
+SENT_JOBS_FILE = Path(os.getenv("SENT_JOBS_FILE", "sent_jobs.json"))
+
+
+def load_sent_jobs() -> dict:
+    """{'nudge': '2026-11-16', 'weekly': '2026-11-15', ...}: the last time slot
+    each scheduled message was sent for."""
+    try:
+        data = json.loads(SENT_JOBS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_sent_jobs(sent: dict) -> None:
+    SENT_JOBS_FILE.write_text(json.dumps(sent, indent=2), encoding="utf-8")
+
+
+def last_slot(rule: dict, now: datetime) -> date | None:
+    """The newest day this message should already have gone out, or None.
+
+    rule = {"every": "day", "at": (8, 0)}                 → today, once 8:00 has passed
+           {"every": "week", "weekday": 6, "at": (9, 0)}  → the last Sunday 9:00 (Monday = 0)
+           {"every": "month", "day": 1, "at": (9, 30)}    → the last 1st of a month, 9:30
+    A daily message is never sent for yesterday: today's one is coming anyway."""
+    hour, minute = rule["at"]
+    passed_today = (now.hour, now.minute) >= (hour, minute)
+    today = now.date()
+    if rule["every"] == "day":
+        return today if passed_today else None
+    if rule["every"] == "week":
+        back = (today.weekday() - rule["weekday"]) % 7
+        if back == 0 and not passed_today:
+            back = 7
+        return today - timedelta(days=back)
+    if rule["every"] == "month":
+        if today.day > rule["day"] or (today.day == rule["day"] and passed_today):
+            return today.replace(day=rule["day"])
+        return (today.replace(day=1) - timedelta(days=1)).replace(day=rule["day"])
+    return None
+
+
+def due_jobs(now: datetime, sent: dict, rules: dict) -> list[tuple[str, str]]:
+    """Which scheduled messages should go out now: [(kind, slot date)].
+
+    A kind seen for the first time is only written into `sent` (no message), so the
+    first start after this update doesn't send a pile of old messages."""
+    due = []
+    for kind, rule in rules.items():
+        slot = last_slot(rule, now)
+        if slot is None:
+            continue
+        slot = slot.isoformat()
+        if kind not in sent:
+            sent[kind] = slot
+        elif str(sent[kind]) < slot:
+            due.append((kind, slot))
+    return due
+
+
 # ---- chat mode: talk to the bot about your notes ----------------------------
 
 CHAT_SYSTEM = """You are Reel Notes, a friendly personal assistant inside Telegram.

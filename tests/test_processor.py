@@ -848,3 +848,53 @@ def test_current_numbers_follow_the_list_you_saw(notes):
     assert p.complete_actions(p.current_numbers(shown, [2])) == ["Try the demo"]
     assert p.current_numbers(None, [2, 5]) == [2, 5]                # no saved list: as typed
     assert p.current_numbers(shown, [99]) == []
+
+
+# ---- catch-up of scheduled messages missed while the PC was off --------------------
+
+RULES = {"nudge": {"every": "day", "at": (8, 0)},
+         "weekly": {"every": "week", "weekday": 6, "at": (9, 0)},      # Sunday
+         "monthly": {"every": "month", "day": 1, "at": (9, 30)}}
+
+
+@pytest.mark.parametrize("kind,now,expected", [
+    ("nudge", "2026-11-16 07:59", None),                 # before 8:00: nothing due yet
+    ("nudge", "2026-11-16 08:00", "2026-11-16"),
+    ("nudge", "2026-11-16 22:15", "2026-11-16"),
+    ("weekly", "2026-11-15 08:59", "2026-11-08"),        # Sunday before 9:00: last week's
+    ("weekly", "2026-11-15 09:00", "2026-11-15"),
+    ("weekly", "2026-11-18 14:00", "2026-11-15"),        # Wednesday: last Sunday
+    ("monthly", "2026-11-01 09:29", "2026-10-01"),
+    ("monthly", "2026-11-01 09:30", "2026-11-01"),
+    ("monthly", "2026-11-20 10:00", "2026-11-01"),
+])
+def test_last_slot(kind, now, expected):
+    slot = p.last_slot(RULES[kind], p.datetime.fromisoformat(now))
+    assert (slot.isoformat() if slot else None) == expected
+
+
+def test_due_jobs_first_run_sends_nothing():
+    sent = {}
+    assert p.due_jobs(p.datetime(2026, 11, 16, 10, 0), sent, RULES) == []
+    assert sent == {"nudge": "2026-11-16", "weekly": "2026-11-15", "monthly": "2026-11-01"}
+
+
+def test_due_jobs_catches_up_what_was_missed():
+    sent = {"nudge": "2026-11-13", "weekly": "2026-11-08", "monthly": "2026-11-01"}
+    # PC off from Friday evening to Monday 10:00: today's nudge + Sunday's review
+    now = p.datetime(2026, 11, 16, 10, 0)
+    assert p.due_jobs(now, sent, RULES) == [("nudge", "2026-11-16"), ("weekly", "2026-11-15")]
+    sent.update(nudge="2026-11-16", weekly="2026-11-15")
+    assert p.due_jobs(now, sent, RULES) == []                           # never sent twice
+    # started early next morning: yesterday's nudge is NOT sent late; today's comes at 8:00
+    sent["nudge"] = "2026-11-14"
+    assert p.due_jobs(p.datetime(2026, 11, 17, 7, 0), sent, RULES) == []
+
+
+def test_sent_jobs_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "SENT_JOBS_FILE", tmp_path / "sent.json")
+    assert p.load_sent_jobs() == {}
+    p.save_sent_jobs({"nudge": "2026-11-16"})
+    assert p.load_sent_jobs() == {"nudge": "2026-11-16"}
+    (tmp_path / "sent.json").write_text("not json")
+    assert p.load_sent_jobs() == {}
