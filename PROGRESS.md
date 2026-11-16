@@ -1,19 +1,23 @@
-# Progress - Batch 1: safety and small bugs (from Fable's review)
-Branch: fix/batch1-safety-and-small-bugs
+# Progress - Batch 2: timing, stable numbers, catch-up, pick one action
+Branch: claude/kind-wright-iffgne
 Last updated: 2026-11-16 (Hobart)
 
 ## Done
-- Step 1: AI output is validated (clean_note_fields, JSON schema for Ollama, one retry, clear error) [B1, B2]
-- Step 2: small bugs: links without https kept (B5), repo name with trailing dot (B6), /retag duplicate Tags line (B7),
-  video caption no longer saved as Source (B8), edited messages ignored (B4), tray uses NOTES_DIR (B10),
-  clear message when the notes folder is missing (B9)
-- Saved Fable's review as docs/REVIEW_BY_FABLE.md
+- Step 1: timing per step (download, Whisper, OCR, AI) in bot.log and in the note reply [review 3.2, Top 5 #5 step A]
+- Step 2: action ids no longer use line numbers; /todo numbers stay the same until the next /todo [B3, B19]
+- Step 3: catch-up of missed nudge, weekly review, resurface, monthly summary and yt-dlp update [F6, B16]
+- Step 4: AI asked for 0-3 actions, every step kept for roadmap reels, simple English;
+  pick-one buttons under each new note [F2, F1]
 
 ## Next step
-- Batch 2: stable /todo numbers + safer action IDs (B3, B19)
-- Then: catch-up of missed nudge/review when the PC starts (F6, now high priority: the PC is not on at a fixed time)
-- Then: fewer actions + 'pick one' buttons (F2, F1)
+- Owner: merge the pull request, restart the bot, send 5 reels and note the ⏱ numbers
+- Then decide from the timings: OCR clean-up (Top 5 #5 step B) or Whisper on GPU (step D)
+- Still open from the review: real yt-dlp / Whisper errors (B11, B12), short words in search (B14),
+  weekly clean-up of old actions (F4), /redo fast (F3)
 
 ## Decisions
-- Owner ticks actions in Telegram only, so stable numbers (B3) matter more than hand-edit safety (B23)
-- Owner has 205 open actions from 48 reels (about 4 per reel): fewer actions per reel is the main product fix
+- English only in notes, bot messages and prompts (owner's choice). Simple English.
+- First start after this update sends no catch-up messages (it only records today's state)
+- A missed daily nudge is not sent the next day (today's nudge comes anyway)
+- Pick buttons use letters (A, B, C) so they are not mixed up with /todo numbers
+- Max 3 real actions per note; creator offers ("comment X") stay as extra low-priority lines

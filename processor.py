@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -91,6 +92,8 @@ covers ALL of them, with at least one key point per video.
 
 Always write every field in English, even if the transcript or on-screen text
 is in another language (e.g. Hindi or Hinglish); translate as needed.
+Write simple English: short sentences and easy words. Keep tool names, commands and
+links exactly as they are.
 
 Return ONLY a JSON object with these keys:
 - "title": short title (max 8 words)
@@ -100,17 +103,21 @@ Return ONLY a JSON object with these keys:
   "github", "claude", "productivity", "communication", "career", "security".
   <<EXISTING_TAGS>>
 - "summary": 2-3 sentences
-- "key_points": list of 4-7 specific, self-contained points. Someone who never watched
+- "key_points": list of 3-7 specific, self-contained points. Someone who never watched
   the video must be able to USE them. Keep the actual details: exact questions,
   steps, commands, numbers, research findings, names, and WHY it works.
+  If the video is a list, a roadmap or a step-by-step guide, keep EVERY step, in the
+  same order, one point per step (up to 15). Do not merge steps and do not drop any.
   Bad: "Ask about favorite memories". Good: "Ask: 'What is your favourite memory?'"
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of 3-6 objects {"text": "...", "priority": "high" | "normal" | "low"}.
+- "action_items": list of 0-3 objects {"text": "...", "priority": "high" | "normal" | "low"}.
+  Fewer is better: I have little time, so give only actions that are really worth doing.
+  Use [] if nothing in the video is worth doing. Never add an action just to fill the list.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
-  When the video names several tools, give each useful tool its own action.
+  When the video names several tools, pick the one or two most useful ones.
   Priority: "high" = specific, quick (under ~30 min) and clearly useful;
   "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
 - "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
@@ -209,6 +216,21 @@ def clean_actions(items) -> list[dict]:
             priority = "low"
         result.append({"text": text, "priority": priority})
     return result
+
+
+MAX_ACTIONS = 3          # real actions kept per note: a short list gets done, a long one doesn't
+
+
+def limit_actions(actions: list[dict]) -> list[dict]:
+    """Keep the first MAX_ACTIONS real actions. Creator offers ("comment X", "link in
+    bio") don't count: they stay as low-priority backups for a missing link."""
+    kept, real = [], 0
+    for a in actions:
+        offer = bool(LOW_PRIORITY_RE.search(a["text"]))
+        if offer or real < MAX_ACTIONS:
+            kept.append(a)
+            real += not offer
+    return kept
 
 
 # Actions/points that only send you to the creator: "comment 'MEMORY' to get the link",
@@ -374,7 +396,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     if not data:
         raise RuntimeError("The AI gave no usable answer. Send the link again or try /redo.")
     clean_note_fields(data)       # wrong types can't crash the note any more
-    data["action_items"] = clean_actions(data.get("action_items", []))
+    data["action_items"] = limit_actions(clean_actions(data.get("action_items", [])))
     data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)
     data["tags"] = clean_tags(data.get("tags", []))
@@ -781,23 +803,43 @@ def image_text(image: Path, workdir: Path) -> str:
         return ocr_lines([png])
 
 
+TIMING_LABELS = {"download": "download", "whisper": "listen", "ocr": "read screen", "ai": "AI"}
+
+
+def timing_text(timings: dict) -> str:
+    """'87s (download 4 · listen 21 · read screen 48 · AI 14)' — where the time went."""
+    parts = [f"{label} {timings[key]:.0f}" for key, label in TIMING_LABELS.items()
+             if key in timings]
+    return f"{sum(timings.values()):.0f}s" + (f" ({' · '.join(parts)})" if parts else "")
+
+
+def log_timing(what: str, timings: dict) -> None:
+    """One line in bot.log per note, so slow steps are easy to see."""
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] timing: {timing_text(timings)} | {what}")
+
+
 def process_videos(videos: list[Path], source: str = "", caption: str = "",
                    creator: dict | None = None) -> tuple[Path, dict]:
     """Full pipeline for one reel or a multi-slide post (videos and/or photos) → ONE note."""
     labels, transcripts, screens, languages = [], [], [], []
     photo_count = 0
+    timings = {"whisper": 0.0, "ocr": 0.0, "ai": 0.0}     # seconds per step
     with tempfile.TemporaryDirectory() as tmp:
         for i, slide in enumerate(videos[:MAX_VIDEOS], start=1):
             workdir = Path(tmp) / f"s{i}"
             workdir.mkdir()
             is_photo = slide.suffix.lower() in IMAGE_EXTS
             try:
+                started = time.perf_counter()
                 if is_photo:
                     text, lang = "", "en"
                     screen = image_text(slide, workdir)
                 else:
                     text, lang = transcribe(slide)
+                    timings["whisper"] += time.perf_counter() - started
+                    started = time.perf_counter()
                     screen = screen_text(slide, workdir)
+                timings["ocr"] += time.perf_counter() - started
             except Exception as exc:   # one broken slide shouldn't stop the whole post
                 print(f"Skipping slide {i} ({slide.name}): {exc!r}")
                 continue
@@ -818,7 +860,12 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "",
         screen = "\n\n".join(f"[{lab}]\n{s[:per_slide]}" for lab, s in zip(labels, screens))
     language = next((lang for lang in languages if lang != "en"), "en")
 
+    started = time.perf_counter()
     data = summarise(transcript, screen, caption)
+    timings["ai"] = time.perf_counter() - started
+    data["timings"] = timings
+    log_timing(f"{len(transcripts)} slide(s), {len(transcript)} chars spoken, "
+               f"{len(screen)} chars on screen", timings)
     data["language"] = language
     data["video_count"] = len(transcripts) - photo_count
     data["photo_count"] = photo_count
@@ -909,8 +956,10 @@ def open_actions() -> list[dict]:
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 priority, text = split_priority(line[6:].strip())
                 text, due = split_due(text)
-                results.append({"path": note, "line": i, "title": title,
-                                "action": text, "priority": priority, "due": due})
+                repeat = sum(r["path"] == note and r["action"] == text for r in results) + 1
+                results.append({"path": note, "line": i, "title": title, "section": section,
+                                "action": text, "priority": priority, "due": due,
+                                "id": action_key(note, text, repeat)})
     today = date.today()
     # Due soon (overdue, today, next 2 days) first, soonest first; then by priority.
     # sort() is stable, so notes keep their order inside each group.
@@ -1241,20 +1290,89 @@ def month_range(today: date | None = None, previous: bool = False) -> tuple[date
 
 # ---- daily nudge ----------------------------------------------------------
 
+def action_key(path: Path, text: str, repeat: int = 1) -> str:
+    """Id made from the note's file name + the action's text (not its line number),
+    so it stays the same when lines move, or the priority or due date changes.
+    `repeat` tells apart the same text written twice in one note."""
+    import hashlib
+    key = hashlib.md5(f"{path.name}\n{text}".encode()).hexdigest()[:10]
+    return key if repeat <= 1 else f"{key}-{repeat}"
+
+
 def action_id(action: dict) -> str:
-    """Short, stable id for an action (fits in a Telegram button):
-    first 8 characters of the note's file-name hash + the line number."""
+    """Short, stable id for an action (fits in a Telegram button)."""
+    return action.get("id") or action_key(action["path"], action["action"])
+
+
+def legacy_action_id(action: dict) -> str:
+    """The old id (file-name hash + line number). Reminders saved before the
+    change still use it."""
     import hashlib
     return hashlib.md5(action["path"].name.encode()).hexdigest()[:8] + ":" + str(action["line"])
 
 
 def find_action(aid: str) -> tuple[int, dict] | None:
     """(position in /todo order starting at 1, action) for an id, or None if
-    it's already done/skipped/deleted."""
+    it's already done/skipped/deleted. Old 'hash:line' ids still work."""
+    old_style = ":" in aid
     for n, a in enumerate(open_actions(), start=1):
-        if action_id(a) == aid:
+        if action_id(a) == aid or (old_style and legacy_action_id(a) == aid):
             return n, a
     return None
+
+
+def note_key(path: Path) -> str:
+    """Short id for a note (fits in a Telegram button)."""
+    import hashlib
+    return hashlib.md5(path.name.encode()).hexdigest()[:10]
+
+
+def note_actions(path: Path) -> list[dict]:
+    """A note's open actions under '## Action items', in the order they are written."""
+    mine = [a for a in open_actions()
+            if a["path"] == path and a["section"] == "Action items"]
+    return sorted(mine, key=lambda a: a["line"])
+
+
+def pick_action(aid: str, due: date) -> tuple[dict, int] | None:
+    """'This is the ONE action I will do from this note': make it 🔥 high with a due
+    date, and make the note's other open actions 🔽 low.
+    Returns (the action, how many others became low), or None if it's gone."""
+    found = find_action(aid)
+    if found is None:
+        return None
+    chosen = found[1]
+    lines = chosen["path"].read_text(encoding="utf-8").splitlines()
+    others = 0
+    for a in note_actions(chosen["path"]) or [chosen]:
+        if action_id(a) == action_id(chosen):
+            lines[a["line"]] = todo_line(a, priority="high", due=due)
+        else:
+            lines[a["line"]] = todo_line(a, priority="low")
+            others += 1
+    if chosen["section"] != "Action items":              # e.g. a "Habit to try"
+        lines[chosen["line"]] = todo_line(chosen, priority="high", due=due)
+    chosen["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return chosen, others
+
+
+def skip_note_actions(key: str) -> list[str]:
+    """'Nothing to do from this note': skip all its open actions (kept as '- [-]')."""
+    numbers = [n for n, a in enumerate(open_actions(), start=1)
+               if note_key(a["path"]) == key and a["section"] == "Action items"]
+    return complete_actions(numbers, "-") if numbers else []
+
+
+def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:
+    """Turn the numbers you SAW in your last /todo into today's /todo positions.
+
+    `shown_ids` = the action ids of that /todo list, in order. An action that is
+    already done or skipped is left out. With no saved list, numbers are used as-is."""
+    if not shown_ids:
+        return numbers
+    now = {action_id(a): n for n, a in enumerate(open_actions(), start=1)}
+    return [now[shown_ids[n - 1]] for n in numbers
+            if 1 <= n <= len(shown_ids) and shown_ids[n - 1] in now]
 
 
 def pick_nudge(after: str | None = None, today: date | None = None) -> dict | None:
@@ -1460,7 +1578,8 @@ def save_reminders(reminders: list[dict]) -> None:
 def add_reminder(action: dict, when: datetime) -> dict:
     """Remember to remind about an action. Stored by action_id, so it still
     points to the right action after /todo numbers change."""
-    reminders = [r for r in load_reminders() if r["action_id"] != action_id(action)]
+    reminders = [r for r in load_reminders()
+                 if r["action_id"] not in (action_id(action), legacy_action_id(action))]
     reminder = {"action_id": action_id(action), "text": action["action"],
                 "when": when.isoformat()}
     reminders.append(reminder)
@@ -1473,6 +1592,67 @@ def remove_reminder(aid: str) -> bool:
     kept = [r for r in reminders if r["action_id"] != aid]
     save_reminders(kept)
     return len(kept) != len(reminders)
+
+
+# ---- catch-up: scheduled messages missed while the PC was off or asleep -----------
+
+SENT_JOBS_FILE = Path(os.getenv("SENT_JOBS_FILE", "sent_jobs.json"))
+
+
+def load_sent_jobs() -> dict:
+    """{'nudge': '2026-11-16', 'weekly': '2026-11-15', ...}: the last time slot
+    each scheduled message was sent for."""
+    try:
+        data = json.loads(SENT_JOBS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_sent_jobs(sent: dict) -> None:
+    SENT_JOBS_FILE.write_text(json.dumps(sent, indent=2), encoding="utf-8")
+
+
+def last_slot(rule: dict, now: datetime) -> date | None:
+    """The newest day this message should already have gone out, or None.
+
+    rule = {"every": "day", "at": (8, 0)}                 → today, once 8:00 has passed
+           {"every": "week", "weekday": 6, "at": (9, 0)}  → the last Sunday 9:00 (Monday = 0)
+           {"every": "month", "day": 1, "at": (9, 30)}    → the last 1st of a month, 9:30
+    A daily message is never sent for yesterday: today's one is coming anyway."""
+    hour, minute = rule["at"]
+    passed_today = (now.hour, now.minute) >= (hour, minute)
+    today = now.date()
+    if rule["every"] == "day":
+        return today if passed_today else None
+    if rule["every"] == "week":
+        back = (today.weekday() - rule["weekday"]) % 7
+        if back == 0 and not passed_today:
+            back = 7
+        return today - timedelta(days=back)
+    if rule["every"] == "month":
+        if today.day > rule["day"] or (today.day == rule["day"] and passed_today):
+            return today.replace(day=rule["day"])
+        return (today.replace(day=1) - timedelta(days=1)).replace(day=rule["day"])
+    return None
+
+
+def due_jobs(now: datetime, sent: dict, rules: dict) -> list[tuple[str, str]]:
+    """Which scheduled messages should go out now: [(kind, slot date)].
+
+    A kind seen for the first time is only written into `sent` (no message), so the
+    first start after this update doesn't send a pile of old messages."""
+    due = []
+    for kind, rule in rules.items():
+        slot = last_slot(rule, now)
+        if slot is None:
+            continue
+        slot = slot.isoformat()
+        if kind not in sent:
+            sent[kind] = slot
+        elif str(sent[kind]) < slot:
+            due.append((kind, slot))
+    return due
 
 
 # ---- chat mode: talk to the bot about your notes ----------------------------

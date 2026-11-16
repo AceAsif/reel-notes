@@ -782,3 +782,164 @@ def test_notes_ready(tmp_path, monkeypatch):
     assert not p.notes_ready()
     monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
     assert p.notes_ready()
+
+
+# ---- timing ------------------------------------------------------------------
+
+def test_timing_text():
+    assert p.timing_text({"download": 4.2, "whisper": 21, "ocr": 48.4, "ai": 14}) == \
+        "88s (download 4 · listen 21 · read screen 48 · AI 14)"
+    assert p.timing_text({"whisper": 0, "ocr": 2, "ai": 3}) == "5s (listen 0 · read screen 2 · AI 3)"
+
+
+def test_note_pipeline_records_timings(notes, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(p, "transcribe", lambda v: ("spoken words", "en"))
+    monkeypatch.setattr(p, "screen_text", lambda v, w: "on screen")
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, schema=None: {
+        "title": "Timed", "category": "tech", "summary": "s", "key_points": ["k"],
+        "resources": [], "action_items": [], "claims": [], "tags": []})
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"x")
+    _, data = p.process_videos([video], "https://x/t")
+    assert set(data["timings"]) == {"whisper", "ocr", "ai"}
+    assert all(v >= 0 for v in data["timings"].values())
+    assert "timing:" in capsys.readouterr().out
+
+
+# ---- stable action ids and /todo numbers ---------------------------------------
+
+def test_action_id_survives_moved_lines_priority_and_due(notes):
+    path = make_note(actions=["Read the docs", "Install it"])
+    a = next(x for x in p.open_actions() if x["action"] == "Read the docs")
+    aid = p.action_id(a)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines.insert(3, "- Mood: good")                       # a hand edit moves every line down
+    path.write_text("\n".join(lines), encoding="utf-8")
+    n, found = p.find_action(aid)
+    assert found["action"] == "Read the docs"
+    p.set_priority([n], "high")
+    p.set_due([p.find_action(aid)[0]], p.date.today() + p.timedelta(days=30))
+    assert p.find_action(aid)[1]["priority"] == "high"    # same id after both changes
+
+
+def test_old_style_action_id_still_found(notes):
+    make_note(actions=["Read the docs"])
+    a = p.open_actions()[0]
+    old = p.legacy_action_id(a)
+    assert ":" in old and p.find_action(old)[1]["action"] == "Read the docs"
+
+
+def test_same_text_twice_gets_two_ids(notes):
+    make_note(actions=["Do it", "Do it"])
+    ids = [p.action_id(a) for a in p.open_actions()]
+    assert len(set(ids)) == 2
+
+
+def test_current_numbers_follow_the_list_you_saw(notes):
+    make_note(title="Old", actions=["Read the docs", "Try the demo"], source="https://x/1")
+    shown = [p.action_id(a) for a in p.open_actions()]             # what /todo showed
+    data = {"title": "New", "category": "tech", "summary": "s", "key_points": [], "resources": [],
+            "tags": [], "claims": [], "quote": "", "lesson": "", "habit": "",
+            "action_items": [{"text": "Install tool", "priority": "high"}]}
+    p.save_note(data, "", "", "https://x/2")                        # a new 🔥 action arrives
+    assert p.open_actions()[0]["action"] == "Install tool"          # the list has moved
+    assert p.complete_actions(p.current_numbers(shown, [1])) == ["Read the docs"]
+    assert p.current_numbers(shown, [1]) == []                      # already done: left out
+    assert p.complete_actions(p.current_numbers(shown, [2])) == ["Try the demo"]
+    assert p.current_numbers(None, [2, 5]) == [2, 5]                # no saved list: as typed
+    assert p.current_numbers(shown, [99]) == []
+
+
+# ---- catch-up of scheduled messages missed while the PC was off --------------------
+
+RULES = {"nudge": {"every": "day", "at": (8, 0)},
+         "weekly": {"every": "week", "weekday": 6, "at": (9, 0)},      # Sunday
+         "monthly": {"every": "month", "day": 1, "at": (9, 30)}}
+
+
+@pytest.mark.parametrize("kind,now,expected", [
+    ("nudge", "2026-11-16 07:59", None),                 # before 8:00: nothing due yet
+    ("nudge", "2026-11-16 08:00", "2026-11-16"),
+    ("nudge", "2026-11-16 22:15", "2026-11-16"),
+    ("weekly", "2026-11-15 08:59", "2026-11-08"),        # Sunday before 9:00: last week's
+    ("weekly", "2026-11-15 09:00", "2026-11-15"),
+    ("weekly", "2026-11-18 14:00", "2026-11-15"),        # Wednesday: last Sunday
+    ("monthly", "2026-11-01 09:29", "2026-10-01"),
+    ("monthly", "2026-11-01 09:30", "2026-11-01"),
+    ("monthly", "2026-11-20 10:00", "2026-11-01"),
+])
+def test_last_slot(kind, now, expected):
+    slot = p.last_slot(RULES[kind], p.datetime.fromisoformat(now))
+    assert (slot.isoformat() if slot else None) == expected
+
+
+def test_due_jobs_first_run_sends_nothing():
+    sent = {}
+    assert p.due_jobs(p.datetime(2026, 11, 16, 10, 0), sent, RULES) == []
+    assert sent == {"nudge": "2026-11-16", "weekly": "2026-11-15", "monthly": "2026-11-01"}
+
+
+def test_due_jobs_catches_up_what_was_missed():
+    sent = {"nudge": "2026-11-13", "weekly": "2026-11-08", "monthly": "2026-11-01"}
+    # PC off from Friday evening to Monday 10:00: today's nudge + Sunday's review
+    now = p.datetime(2026, 11, 16, 10, 0)
+    assert p.due_jobs(now, sent, RULES) == [("nudge", "2026-11-16"), ("weekly", "2026-11-15")]
+    sent.update(nudge="2026-11-16", weekly="2026-11-15")
+    assert p.due_jobs(now, sent, RULES) == []                           # never sent twice
+    # started early next morning: yesterday's nudge is NOT sent late; today's comes at 8:00
+    sent["nudge"] = "2026-11-14"
+    assert p.due_jobs(p.datetime(2026, 11, 17, 7, 0), sent, RULES) == []
+
+
+def test_sent_jobs_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "SENT_JOBS_FILE", tmp_path / "sent.json")
+    assert p.load_sent_jobs() == {}
+    p.save_sent_jobs({"nudge": "2026-11-16"})
+    assert p.load_sent_jobs() == {"nudge": "2026-11-16"}
+    (tmp_path / "sent.json").write_text("not json")
+    assert p.load_sent_jobs() == {}
+
+
+# ---- fewer actions, and pick ONE when a note is saved --------------------------------
+
+def test_prompt_asks_for_few_actions_all_steps_and_simple_english():
+    assert "list of 0-3 objects" in p.PROMPT and "Use [] if nothing" in p.PROMPT
+    assert "keep EVERY step" in p.PROMPT
+    assert "simple English" in p.PROMPT
+
+
+def test_limit_actions_keeps_three_real_ones_plus_creator_offers():
+    actions = p.clean_actions(["One", "Two", "Comment 'AI' to get the link", "Three", "Four"])
+    kept = [a["text"] for a in p.limit_actions(actions)]
+    assert kept == ["One", "Two", "Comment 'AI' to get the link", "Three"]
+
+
+def test_summarise_caps_actions(notes, monkeypatch):
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, schema=None: {
+        "title": "T", "category": "tech", "summary": "s", "key_points": ["k"], "resources": [],
+        "claims": [], "tags": [], "action_items": [{"text": f"Do {i}", "priority": "normal"}
+                                                    for i in range(6)]})
+    assert len(p.summarise("words", "", "")["action_items"]) == 3
+
+
+def test_pick_action_makes_one_high_and_the_rest_low(notes):
+    path = make_note(actions=[{"text": "Read docs", "priority": "high"}, "Install it", "Try demo"])
+    actions = p.note_actions(path)
+    assert [a["action"] for a in actions] == ["Read docs", "Install it", "Try demo"]   # note order
+    due = p.date.today() + p.timedelta(days=1)
+    chosen, others = p.pick_action(p.action_id(actions[1]), due)
+    assert chosen["action"] == "Install it" and others == 2
+    after = {a["action"]: a for a in p.open_actions()}
+    assert after["Install it"]["priority"] == "high" and after["Install it"]["due"] == due
+    assert after["Read docs"]["priority"] == "low" and after["Try demo"]["priority"] == "low"
+    assert p.open_actions()[0]["action"] == "Install it"          # top of /todo
+    p.complete_actions([1])
+    assert p.pick_action(p.action_id(actions[1]), due) is None     # already done
+
+
+def test_skip_note_actions_only_touches_that_note(notes):
+    one = make_note(title="One", actions=["A1", "A2"], source="https://x/1")
+    make_note(title="Two", actions=["B1"], source="https://x/2")
+    assert sorted(p.skip_note_actions(p.note_key(one))) == ["A1", "A2"]
+    assert [a["action"] for a in p.open_actions()] == ["B1"]
+    assert p.skip_note_actions(p.note_key(one)) == []

@@ -416,3 +416,137 @@ def test_video_with_caption_saves_link_as_source(tmp_path, monkeypatch):
     upd = types.SimpleNamespace(message=FakeVideoMsg("just words"), effective_user=types.SimpleNamespace(id=1))
     asyncio.run(bot.handle_video(upd, None))
     assert calls == [("", "just words")]
+
+
+# ---- /todo numbers stay the same until the next /todo ----------------------------
+
+def test_done_uses_numbers_from_last_todo(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    def save(title, action, priority, source):
+        data = {"title": title, "category": "tech", "summary": "s", "key_points": [],
+                "resources": [], "tags": [], "claims": [], "quote": "", "lesson": "", "habit": "",
+                "action_items": [{"text": action, "priority": priority}]}
+        return bot.processor.save_note(data, "", "", source)
+    old = save("Old", "Read the docs", "normal", "https://x/1")
+    context = types.SimpleNamespace(args=[], user_data={})
+    def update():
+        return types.SimpleNamespace(message=FakeMessage(""), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.todo(update(), context))                 # shows "1. Read the docs"
+    save("New", "Install tool", "high", "https://x/2")       # a new 🔥 action moves the list
+    context.args = ["1"]
+    upd = update()
+    asyncio.run(bot.done(upd, context))
+    assert "Read the docs" in upd.message.replies[-1]
+    assert "- [x] Read the docs" in old.read_text(encoding="utf-8")
+    assert [a["action"] for a in bot.processor.open_actions()] == ["Install tool"]
+    upd = update()                                            # number 1 is gone now
+    asyncio.run(bot.done(upd, context))
+    assert "No matching numbers" in upd.message.replies[-1]
+
+
+# ---- catch-up of scheduled messages ------------------------------------------------
+
+def catch_up_setup(tmp_path, monkeypatch, sent):
+    monkeypatch.setattr(bot.processor, "SENT_JOBS_FILE", tmp_path / "sent.json")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    monkeypatch.setattr(bot, "job_rules", lambda: {"nudge": {"every": "day", "at": (0, 0)}})
+    bot.processor.save_sent_jobs(sent)
+    calls = []
+    async def fake_nudge(context): calls.append("nudge")
+    monkeypatch.setitem(bot.JOB_SENDERS, "nudge", fake_nudge)
+    return calls
+
+
+def test_missed_nudge_is_sent_once(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {"nudge": "2000-01-01"})
+    asyncio.run(bot.run_due_jobs(None))
+    asyncio.run(bot.run_due_jobs(None))                  # the next check must not repeat it
+    assert calls == ["nudge"]
+
+
+def test_first_run_sends_nothing(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {})
+    asyncio.run(bot.run_due_jobs(None))
+    assert calls == [] and "nudge" in bot.processor.load_sent_jobs()
+
+
+def test_catch_up_waits_for_notes_folder_and_internet(tmp_path, monkeypatch):
+    calls = catch_up_setup(tmp_path, monkeypatch, {"nudge": "2000-01-01"})
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path / "drive-not-started")
+    asyncio.run(bot.run_due_jobs(None))
+    assert calls == []                                   # waits: Google Drive is not up yet
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    async def offline(context): raise bot.NetworkError("no internet")
+    monkeypatch.setitem(bot.JOB_SENDERS, "nudge", offline)
+    asyncio.run(bot.run_due_jobs(None))
+    assert bot.processor.load_sent_jobs()["nudge"] == "2000-01-01"   # not marked: tried again later
+
+
+def test_job_rules_follow_settings(monkeypatch):
+    monkeypatch.setattr(bot, "NUDGE_TIME", "off")
+    monkeypatch.setattr(bot, "RESURFACE", "off")
+    monkeypatch.setattr(bot, "YTDLP_UPDATE_TIME", "25:99")          # wrong value = off
+    assert set(bot.job_rules()) == {"weekly", "monthly"}
+    monkeypatch.setattr(bot, "NUDGE_TIME", "07:30")
+    assert bot.job_rules()["nudge"] == {"every": "day", "at": (7, 30)}
+
+
+# ---- pick ONE action under a new note ------------------------------------------------
+
+def saved_note(tmp_path, monkeypatch, actions):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    data = {"title": "Tool tips", "category": "tech", "summary": "s", "key_points": ["k"],
+            "resources": [], "tags": [], "claims": [], "quote": "", "lesson": "", "habit": "",
+            "action_items": [{"text": t, "priority": "normal"} for t in actions]}
+    return bot.processor.save_note(data, "", "", "https://x/1"), data
+
+
+def press(data):
+    replies, cleared = [], []
+    async def answer(): pass
+    async def edit_message_reply_markup(reply_markup=None): cleared.append(True)
+    async def reply_text(t): replies.append(t)
+    query = types.SimpleNamespace(data=data, answer=answer,
+                                  edit_message_reply_markup=edit_message_reply_markup,
+                                  message=types.SimpleNamespace(reply_text=reply_text))
+    upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.pick_button_pressed(upd, None))
+    return replies, cleared
+
+
+def test_new_note_reply_has_letters_and_pick_buttons(tmp_path, monkeypatch):
+    path, data = saved_note(tmp_path, monkeypatch, ["Read docs", "Install it"])
+    text = bot.format_reply(data, path)
+    assert "A. Read docs" in text and "B. Install it" in text and "pick ONE" in text
+    rows = bot.pick_buttons(path).inline_keyboard
+    assert [b.text for b in rows[0]] == ["⭐ A", "⭐ B"] and "None" in rows[1][0].text
+    assert all(len(b.callback_data.encode()) <= 64 for row in rows for b in row)
+    sent = {}
+    async def edit_text(t, reply_markup=None): sent.update(text=t, markup=reply_markup)
+    asyncio.run(bot.send_note_reply(types.SimpleNamespace(edit_text=edit_text), data, path))
+    assert sent["markup"] is not None
+
+
+def test_note_without_actions_has_no_buttons(tmp_path, monkeypatch):
+    path, data = saved_note(tmp_path, monkeypatch, [])
+    assert bot.pick_buttons(path) is None and "pick ONE" not in bot.format_reply(data, path)
+
+
+def test_pick_button_sets_one_action(tmp_path, monkeypatch):
+    path, _ = saved_note(tmp_path, monkeypatch, ["Read docs", "Install it"])
+    button = bot.pick_buttons(path).inline_keyboard[0][1]            # ⭐ B
+    replies, cleared = press(button.callback_data)
+    assert "Install it" in replies[0] and "Due tomorrow" in replies[0] and cleared
+    top = bot.processor.open_actions()[0]
+    assert top["action"] == "Install it" and top["priority"] == "high" and top["due"]
+    assert bot.processor.open_actions()[1]["priority"] == "low"
+
+
+def test_none_button_skips_the_notes_actions(tmp_path, monkeypatch):
+    path, _ = saved_note(tmp_path, monkeypatch, ["Read docs", "Install it"])
+    replies, _ = press(bot.pick_buttons(path).inline_keyboard[1][0].callback_data)
+    assert "Skipped 2 actions" in replies[0] and bot.processor.open_actions() == []
+    replies, _ = press(f"pick:none:{bot.processor.note_key(path)}")
+    assert "already" in replies[0]

@@ -18,7 +18,7 @@ acts on them. The goal is not only to store notes but to turn them into actions.
 **Hard constraints (do not break these):**
 - 100% **free and local**. No paid APIs. AI runs on local Ollama (`qwen3:8b`).
 - **Private**. Notes live in a Google Drive folder. Never commit `.env`, `notes/`,
-  `bot.log`, `cookies.txt` or `reminders.json` (all in `.gitignore`).
+  `bot.log`, `cookies.txt`, `reminders.json` or `sent_jobs.json` (all in `.gitignore`).
 - Only the owner can use it (`ALLOWED_USER_ID`).
 - The owner reads simple English (English is not his first language). Bot messages
   must stay short and simple.
@@ -56,11 +56,12 @@ processor.py ── all logic (no Telegram code)
 | `bot.py` (~1280 lines) | Telegram layer: handlers, inline buttons, jobs, formatting replies |
 | `processor.py` (~1770 lines) | Everything else (see section 5) |
 | `tray.py` | Windows tray icon: start/stop the bot, open log |
-| `tests/` | pytest, 166 tests (stubs for pytesseract and faster_whisper) |
+| `tests/` | pytest, 198 tests (stubs for pytesseract and faster_whisper) |
 | `PROGRESS.md` | Checkpoint file for the current task (see "checkpoint-and-report" workflow) |
 | `.env` | Settings (see section 8) |
 
-**No database.** State = Markdown files + `reminders.json`. Every command re-reads and
+**No database.** State = Markdown files + `reminders.json` + `sent_jobs.json` (which
+scheduled messages were already sent). Every command re-reads and
 parses the notes folder. Simple and easy to inspect/edit by hand, but it is O(notes)
 per command and has no index.
 
@@ -104,7 +105,11 @@ Action line formats (Obsidian Tasks style):
 `- [ ] 🔥 text 📅 2026-11-20` (high / due date), `- [ ] text` normal, `- [ ] 🔽 text` low,
 `- [x] ... ✅ date` done, `- [-] ... ❌ date` skipped.
 Only lines under "Action items" and "Habit to try" count as actions.
-`action_id` = md5(filename)[:8] + ":" + line number (breaks if a line is inserted).
+`action_id` = md5(file name + action text)[:10]. It does not use the line number, so it
+survives hand edits and priority / due-date changes. Old `hash:line` ids in saved
+reminders still work (`legacy_action_id`).
+`/todo` numbers: the bot saves the list it last showed (`todo_map` in `user_data`).
+`/done 3`, `/due 3`, `/remind 3`... mean the action shown as 3, until the next `/todo`.
 
 ## 6. Features (commands)
 
@@ -120,6 +125,11 @@ Only lines under "Action items" and "Habit to try" count as actions.
   from the note(s) only (no AI call, nothing invented).
 - **Ops:** `/redo` (rebuild a note, old one moved to `old/`), `/health`, `/update`
   (yt-dlp), nightly yt-dlp auto-update.
+- **New note:** `[⭐ A] [⭐ B] [⭐ C] [🗑 None of them]` buttons. ⭐ makes that action 🔥 and due
+  tomorrow, and the note's other actions 🔽 low. The AI is asked for 0-3 actions only.
+- **Timing:** each note logs `timing: ...` in `bot.log` and shows `⏱` in the reply.
+- **Catch-up:** all scheduled jobs go through `run_due_jobs` (exact time, 20 s after start,
+  every 5 min). A message missed while the PC was off or asleep is sent when it is back.
 - **Scheduled jobs:** daily nudge (08:00), weekly digest (Sun 09:00), weekly resurface
   (Wed 19:00), monthly summary (1st, 09:30), yt-dlp update (03:30), reminders reloaded
   on start.
@@ -158,10 +168,11 @@ These are the owner's real pain points and honest gaps. Good places to start.
 5. **No database/index.** `/search`, chat retrieval (`relevant_notes`) and stats scan
    every file each time. Retrieval is keyword-based, not semantic (no embeddings),
    so chat mode can miss relevant notes.
-6. **`action_id` uses line numbers**, so editing a note by hand can break reminders.
-   `/todo` numbers change when due dates re-sort the list.
+6. (Fixed) `action_id` no longer uses line numbers, and `/todo` numbers stay the same until
+   the next `/todo`. The saved list is in memory only, so it is lost when the bot restarts.
 7. **Single process, single user, PC must be on.** No queue: two long jobs at once can
-   slow the PC. If the PC is off, nothing runs (reminders are sent when it restarts).
+   slow the PC. If the PC is off, nothing runs; missed reminders and scheduled messages are sent when it
+   is back (a missed daily nudge only on the same day).
 8. **Instagram/Facebook changes break yt-dlp** often; cookies are needed sometimes.
 9. **Resources for non-code topics** are only Google search links (no real verification).
 10. **Security:** the bot token and cookies are local files; bot trusts `ALLOWED_USER_ID`
@@ -185,7 +196,7 @@ Big: always-on hosting (VPS/Raspberry Pi) while staying free/private.
 python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt
 copy .env.example .env      # fill in token and ALLOWED_USER_ID
 python bot.py               # or run tray.py
-pip install -r requirements-dev.txt ; python -m pytest      # 166 tests, no network needed
+pip install -r requirements-dev.txt ; python -m pytest      # 198 tests, no network needed
 ```
 
 Tests use stubs for `pytesseract` and `faster_whisper`; Ollama and GitHub calls are

@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -67,10 +68,70 @@ def format_reply(data: dict, note_path: Path) -> str:
                   for c in data["claims"]]
     if data["action_items"]:
         parts += ["", "✅ Action items:"]
-        parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}{a['text']}"
-                  for a in data["action_items"]]
+        parts += [f"{PICK_LETTERS[i] + '. ' if i < len(PICK_LETTERS) else '☐ '}"
+                  f"{processor.PRIORITY_ICON[a['priority']]}{a['text']}"
+                  for i, a in enumerate(data["action_items"])]
+        parts += ["", "👇 Tap ⭐ to pick ONE action to do. It becomes 🔥 and due tomorrow."]
     parts += ["", f"Saved: {note_path.name}"]
+    if data.get("timings"):
+        parts.append(f"⏱ {processor.timing_text(data['timings'])}")
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
+
+
+# ---- pick ONE action when a note is saved -------------------------------------------
+PICK_LETTERS = "ABCDEF"      # letters, so they are not mixed up with /todo numbers
+
+
+def pick_buttons(note_path: Path) -> InlineKeyboardMarkup | None:
+    """[⭐ A] [⭐ B] [⭐ C] / [🗑 None of them] under a new note (None if it has no actions)."""
+    actions = processor.note_actions(note_path)[:len(PICK_LETTERS)]
+    if not actions:
+        return None
+    stars = [InlineKeyboardButton(f"⭐ {PICK_LETTERS[i]}",
+                                  callback_data=f"pick:do:{processor.action_id(a)}")
+             for i, a in enumerate(actions)]
+    none = InlineKeyboardButton("🗑 None of them",
+                                callback_data=f"pick:none:{processor.note_key(note_path)}")
+    return InlineKeyboardMarkup([stars, [none]])
+
+
+async def send_note_reply(status, data: dict, note_path: Path) -> None:
+    """Show the finished note, with the pick-one buttons when it has actions."""
+    text, buttons = format_reply(data, note_path), pick_buttons(note_path)
+    if buttons:
+        await status.edit_text(text, reply_markup=buttons)
+    else:
+        await status.edit_text(text)
+
+
+async def pick_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⭐ A / 🗑 None of them under a new note."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    _, what, key = query.data.split(":", 2)
+    if what == "none":
+        skipped = processor.skip_note_actions(key)
+        reply = (f"🗑 OK. Skipped {len(skipped)} action{'s' * (len(skipped) != 1)} from this note. "
+                 "The note is still saved." if skipped
+                 else "These actions are already done or skipped.")
+    else:
+        tomorrow = datetime.datetime.now(TIMEZONE).date() + datetime.timedelta(days=1)
+        picked = processor.pick_action(key, tomorrow)
+        if picked is None:
+            reply = "This action is already done or skipped."
+        else:
+            action, others = picked
+            reply = f"⭐ Your one action from this note:\n🔥 {action['action']}\n📅 Due tomorrow."
+            if others:
+                reply += f"\n\nThe other {others} from this note {'is' if others == 1 else 'are'} now 🔽 low."
+            reply += "\n\nFinished it? Send /todo, then /done and its number."
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)   # the choice is made
+    except Exception:
+        pass
+    await query.message.reply_text(reply)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,7 +175,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await status.edit_text(f"❌ Something went wrong: {exc}")
         return
 
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
 
 
 async def download(media, path: Path, tries: int = 3) -> None:
@@ -184,7 +245,7 @@ async def process_screenshots(msgs: list) -> None:
     except Exception as exc:
         await status.edit_text(f"❌ Something went wrong: {exc}")
         return
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
 
 
 LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
@@ -220,8 +281,10 @@ async def note_from_link(status, url: str) -> Path | None:
     """Download + process a link, editing the status message as it goes."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
+            started = time.perf_counter()
             videos, caption, creator = await asyncio.to_thread(
                 processor.download_media, url, Path(tmp))
+            download_seconds = time.perf_counter() - started
             if len(videos) > 1:
                 photos = sum(v.suffix.lower() in processor.IMAGE_EXTS for v in videos)
                 kinds = processor.slide_summary(
@@ -233,6 +296,9 @@ async def note_from_link(status, url: str) -> Path | None:
                 await status.edit_text("Downloaded ⏳ Processing...")
             note_path, data = await asyncio.to_thread(
                 processor.process_videos, videos, url, caption, creator)
+            if data.get("timings") is not None:      # show the download time too
+                data["timings"] = {"download": download_seconds, **data["timings"]}
+                processor.log_timing(f"download only, {url}", {"download": download_seconds})
     except Exception as exc:
         await status.edit_text(
             f"❌ Something went wrong: {exc}\n\n"
@@ -241,7 +307,7 @@ async def note_from_link(status, url: str) -> Path | None:
         )
         return None
 
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
     return note_path
 
 
@@ -381,7 +447,8 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
         if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
             lines += [f"📌 {current_title}"]
-        bell = " 🔔" if processor.action_id(a) in reminded else ""
+        bell = " 🔔" if (processor.action_id(a) in reminded
+                        or processor.legacy_action_id(a) in reminded) else ""
         due = f"  {processor.due_label(a['due'])}" if a["due"] else ""
         icon = processor.PRIORITY_ICON[a["priority"]] if group(a) == "due" else ""
         lines.append(f"{n}. ☐ {icon}{a['action']}{due}{bell}")
@@ -399,6 +466,19 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
             row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
         keyboard = InlineKeyboardMarkup([row])
     return "\n".join(lines)[:4000], keyboard
+
+
+def remember_todo(user_data: dict | None) -> None:
+    """Save the list as shown now. /done 3, /due 3, /remind 3... then mean the action
+    you SAW as number 3, even if a new note or a new day has moved the list."""
+    if user_data is not None:
+        user_data["todo_map"] = [processor.action_id(a) for a in processor.open_actions()]
+
+
+def shown_numbers(context, numbers: list[int]) -> list[int]:
+    """Numbers from your last /todo → where those actions are in the list now."""
+    user_data = getattr(context, "user_data", None) or {}
+    return processor.current_numbers(user_data.get("todo_map"), numbers)
 
 
 def due_text() -> str:
@@ -428,6 +508,7 @@ async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     level = next((a for a in args if a in LEVELS), None)
     page = next((int(a) for a in args if a.isdigit()), 1)
     text, keyboard = todo_page(page, level)
+    remember_todo(getattr(context, "user_data", None))
     await update.message.reply_text(text, reply_markup=keyboard)
 
 
@@ -439,6 +520,7 @@ async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     _, tag, page = query.data.split(":")
     text, keyboard = todo_page(int(page), None if tag == "all" else tag)
+    remember_todo(getattr(context, "user_data", None))
     try:
         await query.edit_message_text(text, reply_markup=keyboard)
     except Exception:
@@ -455,14 +537,14 @@ async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(
             f"Usage: /{command} 2  or  /{command} 1 3 4  (numbers come from /todo)")
         return
-    changed = processor.complete_actions(numbers, mark)
+    changed = processor.complete_actions(shown_numbers(context, numbers), mark)
     if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
     remaining = len(processor.open_actions())
     reply = [heading, *[f"• {t}" for t in changed], "",
-             f"{remaining} open items left. Numbers have changed, so send /todo again "
-             "before your next /done or /skip."]
+             f"{remaining} open items left. Your numbers stay the same until you "
+             "send /todo again."]
     await update.message.reply_text("\n".join(reply))
 
 
@@ -486,13 +568,13 @@ async def change_priority(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(
             f"Usage: /{level} 3  or  /{level} 1 4  (numbers come from /todo)")
         return
-    changed = processor.set_priority(numbers, level)
+    changed = processor.set_priority(shown_numbers(context, numbers), level)
     if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
     icon = {"high": "🔥", "normal": "▫️", "low": "🔽"}[level]
     reply = [f"{icon} Now {level} priority:", *[f"• {t}" for t in changed], "",
-             "The list order has changed, so send /todo before your next command."]
+             "Your numbers stay the same until you send /todo again."]
     await update.message.reply_text("\n".join(reply))
 
 
@@ -516,6 +598,7 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines = ["📅 Actions with a due date:"]
         lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}"
                   for n, a in overdue + coming + later]
+        remember_todo(getattr(context, "user_data", None))          # these numbers are the newest ones shown
         await update.message.reply_text("\n".join(lines)[:4000])
         return
     if not when:
@@ -523,7 +606,7 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                         "/due 3 in 5 days. Remove it: /due 3 off")
         return
     if when.lower() in ("off", "none", "clear", "remove"):
-        changed = processor.set_due(numbers, None)
+        changed = processor.set_due(shown_numbers(context, numbers), None)
         msg = "🗑 Removed the due date from:" if changed else "No action with that number."
     else:
         day = processor.parse_due(when)
@@ -532,11 +615,11 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"I don't understand “{when}” (or it's in the past). Try: friday, tomorrow, "
                 "next week, in 3 days, 20/11, 2026-11-20")
             return
-        changed = processor.set_due(numbers, day)
+        changed = processor.set_due(shown_numbers(context, numbers), day)
         msg = f"📅 Due {processor.due_label(day)[2:]}:" if changed else "No action with that number."
     lines = [msg] + [f"• {t}" for t in changed]
     if changed:
-        lines.append("\nNumbers in /todo may change (due-soon actions move to the top).")
+        lines.append("\nYour numbers stay the same until you send /todo again.")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -882,7 +965,9 @@ async def send_nudge(bot, chat_id: int, intro: str) -> None:
 
 
 async def daily_nudge(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_nudge(context.bot, context.job.chat_id, "☀️ Good morning! Today's one action:")
+    late = datetime.datetime.now(TIMEZONE).hour >= 12      # sent late: the PC was off
+    await send_nudge(context.bot, context.job.chat_id,
+                     "🎯 Today's one action:" if late else "☀️ Good morning! Today's one action:")
 
 
 async def nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -972,7 +1057,8 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                         + REMIND_EXAMPLES)
         return
     actions = processor.open_actions()
-    n = int(args[0])
+    now_numbers = shown_numbers(context, [int(args[0])])
+    n = now_numbers[0] if now_numbers else 0
     if not 1 <= n <= len(actions):
         await update.message.reply_text("No action with that number. Send /todo to see the list.")
         return
@@ -1167,10 +1253,71 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if processor.notes_ready():       # the review shows /todo numbers: remember them
+        remember_todo(context.application.user_data[context.job.chat_id])
     await context.bot.send_message(
         chat_id=context.job.chat_id,
         text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],
     )
+
+
+# ---- scheduled messages, with catch-up ------------------------------------------
+# The PC is not always on (or awake) at 8:00. So every scheduled message goes through
+# run_due_jobs: it checks what should have been sent by now and sends what is missing.
+# It runs at the exact times, shortly after the bot starts, and every few minutes.
+
+CATCH_UP_EVERY = 300          # seconds between checks
+_jobs_lock = asyncio.Lock()
+
+
+def clock(text: str, name: str) -> tuple[int, int] | None:
+    """'08:00' → (8, 0). 'off' or a wrong value → None."""
+    if text == "off":
+        return None
+    try:
+        hour, minute = (int(x) for x in text.split(":"))
+        datetime.time(hour, minute)
+        return hour, minute
+    except ValueError:
+        print(f"{name}={text!r} isn't HH:MM, so it is turned off")
+        return None
+
+
+def job_rules() -> dict:
+    """When each scheduled message goes out (weekday: Monday = 0 ... Sunday = 6)."""
+    rules = {}
+    if clock(NUDGE_TIME, "NUDGE_TIME"):
+        rules["nudge"] = {"every": "day", "at": clock(NUDGE_TIME, "NUDGE_TIME")}
+    rules["weekly"] = {"every": "week", "weekday": 6, "at": (9, 0)}          # Sunday 9:00 am
+    if RESURFACE != "off":
+        rules["resurface"] = {"every": "week", "weekday": 2, "at": (19, 0)}  # Wednesday 7:00 pm
+    rules["monthly"] = {"every": "month", "day": 1, "at": (9, 30)}           # 1st, 9:30 am
+    if clock(YTDLP_UPDATE_TIME, "YTDLP_UPDATE_TIME"):                         # last: it is slow
+        rules["ytdlp"] = {"every": "day", "at": clock(YTDLP_UPDATE_TIME, "YTDLP_UPDATE_TIME")}
+    return rules
+
+
+JOB_SENDERS = {"nudge": daily_nudge, "weekly": weekly_digest, "resurface": weekly_resurface,
+               "monthly": monthly_summary, "ytdlp": daily_ytdlp_update}
+
+
+async def run_due_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send every scheduled message that is due and not sent yet (see above)."""
+    async with _jobs_lock:                       # two checks at once must not send twice
+        sent = processor.load_sent_jobs()
+        before = dict(sent)
+        due = processor.due_jobs(datetime.datetime.now(TIMEZONE), sent, job_rules())
+        if sent != before:
+            processor.save_sent_jobs(sent)       # first run: remember, send nothing
+        if not processor.notes_ready():          # Google Drive not started yet: try again later
+            due = [(kind, slot) for kind, slot in due if kind == "ytdlp"]
+        for kind, slot in due:
+            try:
+                await JOB_SENDERS[kind](context)
+            except (NetworkError, TimedOut):
+                return                           # no internet yet: the next check sends it
+            sent[kind] = slot
+            processor.save_sent_jobs(sent)
 
 
 async def ignore_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1212,6 +1359,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
+    app.add_handler(CallbackQueryHandler(pick_button_pressed, pattern=r"^pick:"))
     app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
     app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
@@ -1243,42 +1391,16 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(resurface_button_pressed, pattern=r"^resurf:"))
 
     if ALLOWED_USER_ID:
-        # Every Sunday at 9:00 am (in python-telegram-bot v20+, 0 = Sunday)
-        app.job_queue.run_daily(
-            weekly_digest,
-            time=datetime.time(9, 0, tzinfo=TIMEZONE),
-            days=(0,),
-            chat_id=int(ALLOWED_USER_ID),
-        )
-        # Every day at NUDGE_TIME (default 08:00): one action to do today
-        if NUDGE_TIME != "off":
-            try:
-                hour, minute = (int(x) for x in NUDGE_TIME.split(":"))
-                app.job_queue.run_daily(
-                    daily_nudge,
-                    time=datetime.time(hour, minute, tzinfo=TIMEZONE),
-                    chat_id=int(ALLOWED_USER_ID),
-                )
-            except ValueError:
-                print(f"NUDGE_TIME={NUDGE_TIME!r} isn't HH:MM, daily nudge disabled")
-
-        # Wednesday 7:00 pm: one older note to remember (0 = Sunday, so 3 = Wednesday)
-        if RESURFACE != "off":
-            app.job_queue.run_daily(weekly_resurface,
-                                    time=datetime.time(19, 0, tzinfo=TIMEZONE),
-                                    days=(3,), chat_id=int(ALLOWED_USER_ID))
-        # 1st of every month, 9:30 am: summary of the previous month
-        app.job_queue.run_monthly(monthly_summary, when=datetime.time(9, 30, tzinfo=TIMEZONE),
-                                  day=1, chat_id=int(ALLOWED_USER_ID))
-        # Every night at YTDLP_UPDATE_TIME (default 03:30): keep yt-dlp fresh
-        if YTDLP_UPDATE_TIME != "off":
-            try:
-                hour, minute = (int(x) for x in YTDLP_UPDATE_TIME.split(":"))
-                app.job_queue.run_daily(daily_ytdlp_update,
-                                        time=datetime.time(hour, minute, tzinfo=TIMEZONE),
-                                        chat_id=int(ALLOWED_USER_ID))
-            except ValueError:
-                print(f"YTDLP_UPDATE_TIME={YTDLP_UPDATE_TIME!r} isn't HH:MM, auto-update disabled")
+        chat_id = int(ALLOWED_USER_ID)
+        # Daily nudge, Sunday review, Wednesday "remember this?", monthly summary and the
+        # yt-dlp update all run through run_due_jobs: at their exact time, 20 seconds after
+        # the bot starts, and every 5 minutes. A message missed while the PC was off or
+        # asleep is sent as soon as the PC is back.
+        for rule in job_rules().values():
+            app.job_queue.run_daily(run_due_jobs, chat_id=chat_id,
+                                    time=datetime.time(*rule["at"], tzinfo=TIMEZONE))
+        app.job_queue.run_repeating(run_due_jobs, interval=CATCH_UP_EVERY, first=20,
+                                    chat_id=chat_id)
         # Reminders saved before a restart (or missed while the PC was off)
         for r in processor.load_reminders():
             schedule_reminder(app.job_queue, r, int(ALLOWED_USER_ID))
