@@ -1398,6 +1398,36 @@ def note_actions(path: Path) -> list[dict]:
     return sorted(mine, key=lambda a: a["line"])
 
 
+def cleanup_plan() -> dict:
+    """What /cleanup would skip. Nothing is changed here.
+
+    * junk: "comment X / DM me / link in bio" actions (they are not real actions);
+    * extras: in a note with several actions, all but the best one (highest priority,
+      then first). Actions with a due date and "Habit to try" lines are always kept.
+    `ids` = the action ids to skip; `left` = how many open actions remain after."""
+    actions = open_actions()
+    junk = [a for a in actions if LOW_PRIORITY_RE.search(a["action"])]
+    junk_ids = {action_id(a) for a in junk}
+    by_note: dict[Path, list[dict]] = {}
+    for a in actions:
+        if action_id(a) not in junk_ids and a["section"] == "Action items":
+            by_note.setdefault(a["path"], []).append(a)
+    extras = []
+    for items in by_note.values():
+        best = min(items, key=lambda a: (PRIORITY_RANK[a["priority"]], a["line"]))
+        extras += [a for a in items if a is not best and not a["due"]]
+    ids = [action_id(a) for a in junk + extras]
+    return {"open": len(actions), "junk": len(junk), "extras": len(extras), "ids": ids,
+            "left": len(actions) - len(ids), "notes": len({a["path"] for a in actions})}
+
+
+def skip_actions_by_id(ids: list[str]) -> list[str]:
+    """Skip ('- [-]') the open actions with these ids. Already done ones are ignored."""
+    wanted = set(ids)
+    numbers = [n for n, a in enumerate(open_actions(), start=1) if action_id(a) in wanted]
+    return complete_actions(numbers, "-") if numbers else []
+
+
 def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:
     """Turn the numbers you SAW in your last /todo into today's /todo positions.
 

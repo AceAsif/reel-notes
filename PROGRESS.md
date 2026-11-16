@@ -12,12 +12,15 @@ Last updated: 2026-11-16
   (plain bullets, not on /todo).
 - Step 3: Removed the A/B/C pick buttons (and pick_action, skip_note_actions, note_key).
 
+- Step 4: /cleanup (skip junk "comment X" actions + extra actions, keep the best per note, due-dated
+  ones and habits; confirm button). Sunday review hints at it above 30 open actions.
+- Step 5: README, HANDOVER, BotFather command list.
+
 ## In progress
 - nothing
 
 ## Next step
-- Step 4: /cleanup (skip junk "comment X" actions + keep 1 action per old note, with a confirm
-  button), a hint in the Sunday review. Then docs, tests, push, report.
+- Merge the PR, git pull, restart the bot, send /cleanup once, then use the bot for a week.
 
 ## Decisions
 - Old actions without an icon get a guessed type for display only; their note lines are not

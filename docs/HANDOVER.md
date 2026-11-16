@@ -125,8 +125,15 @@ reminders still work (`legacy_action_id`).
   from the note(s) only (no AI call, nothing invented).
 - **Ops:** `/redo` (rebuild a note, old one moved to `old/`), `/health`, `/update`
   (yt-dlp), nightly yt-dlp auto-update.
-- **New note:** `[⭐ A] [⭐ B] [⭐ C] [🗑 None of them]` buttons. ⭐ makes that action 🔥 and due
-  tomorrow, and the note's other actions 🔽 low. The AI is asked for 0-3 actions only.
+- **New note:** one main action (`split_actions`: best priority first). Extra actions go to
+  `## Other ideas` (plain bullets). "Comment X / DM me" offers are not actions: they go to
+  `## From the creator`. No buttons (the A/B/C pick buttons were removed in batch 3).
+- **Action types:** `🤖 ai`, `🧠 habit`, `🔗 lookup`. The AI sets `type`; `guess_kind` is the
+  fallback and is used for older notes. Saved after the priority icon: `- [ ] 🔥 🤖 text`.
+  `action_id` ignores the icon. `/todo ai|habit|lookup` filters.
+- **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
+  actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
+  The Sunday review hints at it above 30 open actions.
 - **Timing:** each note logs `timing: ...` in `bot.log` and shows `⏱` in the reply.
 - **Catch-up:** all scheduled jobs go through `run_due_jobs` (exact time, 20 s after start,
   every 5 min). A message missed while the PC was off or asleep is sent when it is back.

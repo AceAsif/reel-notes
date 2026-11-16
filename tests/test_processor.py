@@ -961,3 +961,37 @@ def test_priority_change_keeps_the_saved_type(notes):
     p.set_priority([1], "high")
     assert "- [ ] 🔥 🤖 Ask Claude to plan my week" in path.read_text(encoding="utf-8")
 
+
+
+# ---- /cleanup ----------------------------------------------------------------------
+
+def old_note(title, lines):
+    """A note written by hand, like the old ones (several actions, no type icons)."""
+    path = p.NOTES_DIR / f"2026-11-01_1000_{title.lower().replace(' ', '-')}.md"
+    path.write_text(f"# {title}\n\n- Date: 2026-11-01 10:00\n- Category: tech\n\n## Action items\n"
+                    + "\n".join(lines) + "\n\n## Transcript\nwords\n", encoding="utf-8")
+    return path
+
+
+def test_cleanup_plan_skips_junk_and_extras_but_keeps_best_dated_and_habits(notes):
+    old_note("One", ["- [ ] 🔥 Best", "- [ ] Second", "- [ ] 🔽 Third",
+                     "- [ ] 🔽 Comment 'MEMORY' to get the repo"])
+    old_note("Two", ["- [ ] Normal A", "- [ ] Normal B 📅 2030-01-01"])
+    make_note(title="Habit note", category="motivation", habit="Every Monday, plan the week",
+              actions=["Only action"], source="https://x/h")
+    plan = p.cleanup_plan()
+    assert plan["open"] == 8 and plan["junk"] == 1 and plan["extras"] == 2
+    assert plan["left"] == 5 and plan["notes"] == 3
+    skipped = p.skip_actions_by_id(plan["ids"])
+    assert sorted(skipped) == ["Comment 'MEMORY' to get the repo", "Second", "Third"]
+    left = [a["action"] for a in p.open_actions()]
+    assert sorted(left) == sorted(["Best", "Normal A", "Normal B",
+                                   "Every Monday, plan the week", "Only action"])
+    assert p.cleanup_plan()["ids"] == []                      # nothing more to do
+    assert "- [-] 🔽 Third" in (p.NOTES_DIR / "2026-11-01_1000_one.md").read_text(encoding="utf-8")
+
+
+def test_cleanup_with_nothing_to_do(notes):
+    make_note(actions=["Do one thing"])
+    plan = p.cleanup_plan()
+    assert plan["ids"] == [] and plan["open"] == 1

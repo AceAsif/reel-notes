@@ -539,3 +539,62 @@ def test_todo_shows_type_icons_and_filters_by_type(tmp_path, monkeypatch):
     assert "Ask Claude" in only_ai and "Every morning" not in only_ai
     none, _ = bot.todo_page(1, kind="lookup")
     assert none.startswith("No Look up / set up actions")
+
+
+# ---- /cleanup ----------------------------------------------------------------------------
+
+def cleanup_setup(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    (tmp_path / "2026-11-01_1000_old.md").write_text(
+        "# Old\n\n- Date: 2026-11-01 10:00\n- Category: tech\n\n## Action items\n"
+        "- [ ] 🔥 Keep me\n- [ ] Extra one\n- [ ] Comment 'FABLE' to get the link\n\n"
+        "## Transcript\nx\n", encoding="utf-8")
+
+
+def press_cleanup(data):
+    replies, cleared = [], []
+    async def answer(): pass
+    async def edit_message_reply_markup(reply_markup=None): cleared.append(True)
+    async def reply_text(t): replies.append(t)
+    query = types.SimpleNamespace(data=data, answer=answer,
+                                  edit_message_reply_markup=edit_message_reply_markup,
+                                  message=types.SimpleNamespace(reply_text=reply_text))
+    upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.cleanup_button_pressed(upd, None))
+    return replies, cleared
+
+
+def test_cleanup_asks_first_then_skips(tmp_path, monkeypatch):
+    cleanup_setup(tmp_path, monkeypatch)
+    sent = []
+    class Msg:
+        async def reply_text(self, t, reply_markup=None): sent.append((t, reply_markup))
+    upd = types.SimpleNamespace(message=Msg(), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.cleanup(upd, None))
+    text, markup = sent[0]
+    assert "3 open actions" in text and "skip 2 and keep 1" in text
+    assert [b.callback_data for b in markup.inline_keyboard[0]] == ["cleanup:yes", "cleanup:no"]
+    assert len(bot.processor.open_actions()) == 3              # nothing changed yet
+    replies, cleared = press_cleanup("cleanup:yes")
+    assert "Skipped 2. 1 open actions left" in replies[0] and cleared
+    assert [a["action"] for a in bot.processor.open_actions()] == ["Keep me"]
+    replies, _ = press_cleanup("cleanup:yes")                   # pressed twice
+    assert "Nothing left" in replies[0]
+
+
+def test_cleanup_cancel_changes_nothing(tmp_path, monkeypatch):
+    cleanup_setup(tmp_path, monkeypatch)
+    replies, _ = press_cleanup("cleanup:no")
+    assert "nothing changed" in replies[0] and len(bot.processor.open_actions()) == 3
+
+
+def test_cleanup_command_is_registered():
+    assert first_matching_handler("/cleanup") is not None
+
+
+def test_weekly_review_hint_only_when_the_list_is_long(tmp_path, monkeypatch):
+    cleanup_setup(tmp_path, monkeypatch)
+    assert bot.cleanup_hint() == ""                              # only 3 open
+    monkeypatch.setattr(bot, "CLEANUP_HINT_OVER", 2)
+    assert "/cleanup" in bot.cleanup_hint() and "skip 2" in bot.cleanup_hint()

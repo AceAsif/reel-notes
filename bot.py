@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
+        "Actions: /todo  /cleanup  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
@@ -1215,12 +1215,78 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(stats_text())
 
 
+CLEANUP_HINT_OVER = 30          # the Sunday review suggests /cleanup above this many open actions
+
+
+# ---- /cleanup: fewer open actions ---------------------------------------------------
+
+def cleanup_text(plan: dict) -> str:
+    skip = len(plan["ids"])
+    return ("🧹 Clean-up\n\n"
+            f"You have {plan['open']} open actions from {plan['notes']} notes.\n"
+            f"• {plan['junk']} are \"comment X / DM me\" offers. They are not real actions.\n"
+            f"• {plan['extras']} are extra actions from notes that have more than one. "
+            "I keep the best one per note, and anything with a due date.\n\n"
+            f"I would skip {skip} and keep {plan['left']}. "
+            "Skipped actions stay in the notes, marked ❌.")
+
+
+async def cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cleanup = skip junk and extra actions, after you confirm."""
+    if not is_allowed(update):
+        return
+    if not processor.notes_ready():
+        await update.message.reply_text(processor.NOTES_MISSING)
+        return
+    plan = processor.cleanup_plan()
+    if not plan["ids"]:
+        await update.message.reply_text(
+            f"🎉 Nothing to clean up. You have {plan['open']} open actions.")
+        return
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🧹 Yes, skip {len(plan['ids'])}", callback_data="cleanup:yes"),
+        InlineKeyboardButton("Cancel", callback_data="cleanup:no")]])
+    await update.message.reply_text(cleanup_text(plan), reply_markup=buttons)
+
+
+async def cleanup_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    if query.data == "cleanup:yes":
+        # work out the list again now: the first message may be old
+        skipped = processor.skip_actions_by_id(processor.cleanup_plan()["ids"])
+        left = len(processor.open_actions())
+        reply = (f"🧹 Skipped {len(skipped)}. {left} open actions left. "
+                 "Send /todo to see them.") if skipped else "Nothing left to clean up."
+    else:
+        reply = "OK, nothing changed."
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await query.message.reply_text(reply)
+
+
+def cleanup_hint() -> str:
+    """One line for the weekly review when the list is long ('' otherwise)."""
+    if not processor.notes_ready():
+        return ""
+    plan = processor.cleanup_plan()
+    if plan["open"] > CLEANUP_HINT_OVER and plan["ids"]:
+        return (f"\n\n🧹 {plan['open']} open actions is a lot. "
+                f"Send /cleanup to skip {len(plan['ids'])} of them.")
+    return ""
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     if processor.notes_ready():       # the review shows /todo numbers: remember them
         remember_todo(context.application.user_data[context.job.chat_id])
     await context.bot.send_message(
         chat_id=context.job.chat_id,
-        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],
+        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text()
+              + cleanup_hint())[:4000],
     )
 
 
@@ -1312,6 +1378,8 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, ignore_edited), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
+    app.add_handler(CommandHandler("cleanup", cleanup))
+    app.add_handler(CallbackQueryHandler(cleanup_button_pressed, pattern=r"^cleanup:"))
     app.add_handler(CommandHandler("done", done))
     app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("high", high))
