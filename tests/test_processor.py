@@ -91,7 +91,7 @@ def test_skip_hides_action(notes):
     path = make_note(actions=["a", "b"])
     p.complete_actions([1], "-")
     assert [a["action"] for a in p.open_actions()] == ["b"]
-    assert "- [-] a" in path.read_text(encoding="utf-8")
+    assert "- [-] 🔗 a" in path.read_text(encoding="utf-8")
 
 
 def test_caption_checkbox_is_not_an_action(notes):
@@ -144,7 +144,7 @@ def test_done_date_and_weekly_stats(notes):
     p.complete_actions([1], "-")       # skipped today
     text = path.read_text(encoding="utf-8")
     today = date.today().isoformat()
-    assert f"- [x] a ✅ {today}" in text and f"- [-] b ❌ {today}" in text
+    assert f"- [x] 🔗 a ✅ {today}" in text and f"- [-] 🔗 b ❌ {today}" in text
     s = p.weekly_stats()
     assert (s["saved"], s["done"], s["skipped"], s["open"]) == (1, 1, 1, 1)
     assert s["categories"] == {"tech": 1} and s["top_tags"] == [("python", 1)]
@@ -486,7 +486,7 @@ def test_note_has_creator_and_offer_section(notes):
     assert "- Offer: Comment 'MEMORY' to receive the repo" in offer
     assert "- Offer: Follow the creator for more" in offer
     # still a (low priority) action, nothing deleted:
-    assert "- [ ] 🔽 Comment 'MEMORY' to receive the repo" in text
+    assert "- [ ] 🔽 🔗 Comment 'MEMORY' to receive the repo" in text
     assert p.find_note_by_source("https://x/1") == path      # duplicate check unaffected
 
 
@@ -903,43 +903,61 @@ def test_sent_jobs_file(tmp_path, monkeypatch):
 # ---- fewer actions, and pick ONE when a note is saved --------------------------------
 
 def test_prompt_asks_for_few_actions_all_steps_and_simple_english():
-    assert "list of 0-3 objects" in p.PROMPT and "Use [] if nothing" in p.PROMPT
+    assert "list of 0-2 objects" in p.PROMPT and "Use [] if nothing" in p.PROMPT
     assert "keep EVERY step" in p.PROMPT
     assert "simple English" in p.PROMPT
 
 
-def test_limit_actions_keeps_three_real_ones_plus_creator_offers():
-    actions = p.clean_actions(["One", "Two", "Comment 'AI' to get the link", "Three", "Four"])
-    kept = [a["text"] for a in p.limit_actions(actions)]
-    assert kept == ["One", "Two", "Comment 'AI' to get the link", "Three"]
+def test_split_actions_keeps_the_best_one_and_moves_offers_out():
+    actions = p.clean_actions(["One", {"text": "Two", "priority": "high"},
+                               "Comment 'AI' to get the link", "Three"])
+    kept, extras, offers = p.split_actions(actions)
+    assert [a["text"] for a in kept] == ["Two"]                 # highest priority wins
+    assert [a["text"] for a in extras] == ["One", "Three"]
+    assert offers == ["Comment 'AI' to get the link"]
+    assert [a["text"] for a in p.limit_actions(actions)] == ["Two"]
 
 
-def test_summarise_caps_actions(notes, monkeypatch):
+def test_summarise_gives_one_action_other_ideas_and_offers(notes, monkeypatch):
     monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, schema=None: {
         "title": "T", "category": "tech", "summary": "s", "key_points": ["k"], "resources": [],
-        "claims": [], "tags": [], "action_items": [{"text": f"Do {i}", "priority": "normal"}
-                                                    for i in range(6)]})
-    assert len(p.summarise("words", "", "")["action_items"]) == 3
+        "claims": [], "tags": [], "action_items": [
+            {"text": "Do A", "priority": "normal"}, {"text": "Do B", "priority": "normal"},
+            {"text": "Comment 'MEMORY' to get the repo", "priority": "normal"}]})
+    data = p.summarise("words", "", "")
+    assert [a["text"] for a in data["action_items"]] == ["Do A"]
+    assert data["other_ideas"] == ["Do B"]
+    assert data["creator_offers"] == ["Comment 'MEMORY' to get the repo"]
+    text = p.save_note(data, "t", "s", "https://x/9").read_text(encoding="utf-8")
+    assert "## Other ideas\n- Do B" in text
+    assert "- Offer: Comment 'MEMORY' to get the repo" in text
+    assert text.count("- [ ] ") == 1                             # only one real action
 
 
-def test_pick_action_makes_one_high_and_the_rest_low(notes):
-    path = make_note(actions=[{"text": "Read docs", "priority": "high"}, "Install it", "Try demo"])
-    actions = p.note_actions(path)
-    assert [a["action"] for a in actions] == ["Read docs", "Install it", "Try demo"]   # note order
-    due = p.date.today() + p.timedelta(days=1)
-    chosen, others = p.pick_action(p.action_id(actions[1]), due)
-    assert chosen["action"] == "Install it" and others == 2
-    after = {a["action"]: a for a in p.open_actions()}
-    assert after["Install it"]["priority"] == "high" and after["Install it"]["due"] == due
-    assert after["Read docs"]["priority"] == "low" and after["Try demo"]["priority"] == "low"
-    assert p.open_actions()[0]["action"] == "Install it"          # top of /todo
-    p.complete_actions([1])
-    assert p.pick_action(p.action_id(actions[1]), due) is None     # already done
+def test_new_notes_store_the_action_type(notes):
+    path = make_note(actions=[{"text": "Ask Claude to rewrite my CV", "type": "ai"}])
+    assert "- [ ] 🤖 Ask Claude to rewrite my CV" in path.read_text(encoding="utf-8")
+    a = p.open_actions()[0]
+    assert a["kind"] == "ai" and a["kind_saved"] and a["action"] == "Ask Claude to rewrite my CV"
 
 
-def test_skip_note_actions_only_touches_that_note(notes):
-    one = make_note(title="One", actions=["A1", "A2"], source="https://x/1")
-    make_note(title="Two", actions=["B1"], source="https://x/2")
-    assert sorted(p.skip_note_actions(p.note_key(one))) == ["A1", "A2"]
-    assert [a["action"] for a in p.open_actions()] == ["B1"]
-    assert p.skip_note_actions(p.note_key(one)) == []
+def test_guess_kind_for_old_actions():
+    assert p.guess_kind("Paste the prompt into ChatGPT") == "ai"
+    assert p.guess_kind("Every morning, write 3 goals") == "habit"
+    assert p.guess_kind("Find the Strix GitHub repo and read its README") == "lookup"
+    assert p.guess_kind("Do the thing", category="motivation") == "habit"
+
+
+def test_action_id_ignores_the_type_icon(notes):
+    path = make_note(actions=["Read the docs"])
+    before = p.open_actions()[0]
+    path.write_text(path.read_text(encoding="utf-8").replace("- [ ] 🔗 ", "- [ ] "), encoding="utf-8")
+    after = p.open_actions()[0]
+    assert after["kind_saved"] is False and p.action_id(after) == p.action_id(before)
+
+
+def test_priority_change_keeps_the_saved_type(notes):
+    path = make_note(actions=[{"text": "Ask Claude to plan my week", "type": "ai"}])
+    p.set_priority([1], "high")
+    assert "- [ ] 🔥 🤖 Ask Claude to plan my week" in path.read_text(encoding="utf-8")
+

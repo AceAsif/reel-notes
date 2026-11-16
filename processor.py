@@ -112,14 +112,19 @@ Return ONLY a JSON object with these keys:
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of 0-3 objects {"text": "...", "priority": "high" | "normal" | "low"}.
-  Fewer is better: I have little time, so give only actions that are really worth doing.
+- "action_items": list of 0-2 objects {"text": "...", "priority": "high" | "normal" | "low",
+  "type": "ai" | "habit" | "lookup"}.
+  Fewer is better: I have little time, so give only the one or two actions that are really
+  worth doing (the best first).
   Use [] if nothing in the video is worth doing. Never add an action just to fill the list.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
   When the video names several tools, pick the one or two most useful ones.
   Priority: "high" = specific, quick (under ~30 min) and clearly useful;
   "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
+  Type: "ai" = an AI tool (Claude, ChatGPT...) can do it or help with it, e.g. "Ask Claude to
+  rewrite my CV"; "habit" = something I practise myself, e.g. "Every morning, write 3 goals";
+  "lookup" = open a site, read a page, install or set up a tool.
 - "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
   at face value: big numbers or results ("7 billion free tokens", "10x faster"),
   "free"/"official"/"secret"/guaranteed claims, research or statistics with no source,
@@ -196,6 +201,41 @@ def ask_ollama_json(prompt: str, schema: dict | None = None, tries: int = 2) -> 
 PRIORITY_ICON = {"high": "🔥 ", "normal": "", "low": "🔽 "}
 PRIORITY_ORDER = {"high": 0, "normal": 1, "low": 2}
 
+# What kind of action it is. 🤖 = an AI can do (or help with) it, 🧠 = a habit or
+# mindset thing for me, 🔗 = look something up, open a site, install or set up.
+KIND_ICON = {"ai": "🤖", "habit": "🧠", "lookup": "🔗"}
+KIND_LABEL = {"ai": "AI can do it", "habit": "Habit", "lookup": "Look up / set up"}
+AI_RE = re.compile(
+    r"\b(?:claude|chatgpt|gpt|gemini|copilot|cursor|llm|prompt|ai agents?|ai tools?|"
+    r"ai assistants?|ask (?:an? )?ai|ask it|generate|automate|build (?:an? )?(?:app|bot|agent|tool|"
+    r"workflow)|write (?:a )?(?:script|code|prompt))\b", re.I)
+HABIT_RE = re.compile(
+    r"\b(?:practi[sc]e|every (?:day|morning|night|week|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)|daily|weekly|journal|meditate|exercise|workout|write down|"
+    r"ask yourself|tell yourself|spend \d+|\d+ minutes?|stop |start (?:your|the) day)\b", re.I)
+
+
+def guess_kind(text: str, category: str = "") -> str:
+    """Best guess for an action with no saved type (older notes): no AI needed."""
+    if AI_RE.search(text):
+        return "ai"
+    if HABIT_RE.search(text) or category == "motivation":
+        return "habit"
+    return "lookup"
+
+
+def split_kind(text: str) -> tuple[str, str]:
+    """'🤖 Do the thing' -> ('ai', 'Do the thing'); no icon -> ('', text)."""
+    for kind, icon in KIND_ICON.items():
+        if text.startswith(icon + " "):
+            return kind, text[len(icon) + 1:].lstrip()
+    return "", text
+
+
+def kind_icon(kind: str) -> str:
+    """'🤖 ' for a kind (with the space), '' for none."""
+    return KIND_ICON[kind] + " " if kind in KIND_ICON else ""
+
 
 def clean_actions(items) -> list[dict]:
     """Accept what the AI returns (objects or plain strings) → [{text, priority}]."""
@@ -204,8 +244,9 @@ def clean_actions(items) -> list[dict]:
         if isinstance(item, dict):
             text = str(item.get("text") or item.get("action") or "").strip()
             priority = str(item.get("priority", "normal")).lower().strip()
+            kind = str(item.get("type") or item.get("kind") or "").lower().strip()
         else:
-            text, priority = str(item).strip(), "normal"
+            text, priority, kind = str(item).strip(), "normal", ""
         if not text:
             continue
         if priority not in PRIORITY_ICON:
@@ -214,23 +255,31 @@ def clean_actions(items) -> list[dict]:
         # creator (bio, DM, comment, follow, channel) are always low.
         if LOW_PRIORITY_RE.search(text):
             priority = "low"
-        result.append({"text": text, "priority": priority})
+        if kind not in KIND_ICON:                 # the model skipped or misspelled it
+            kind = guess_kind(text)
+        result.append({"text": text, "priority": priority, "kind": kind})
     return result
 
 
-MAX_ACTIONS = 3          # real actions kept per note: a short list gets done, a long one doesn't
+MAX_ACTIONS = 1          # one main action per reel: a short list gets done, a long one doesn't
+PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
+
+
+def split_actions(actions: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """(the action(s) to keep, other ideas, creator offers).
+
+    Creator offers ("comment X", "link in bio") are not actions: they go to the
+    "From the creator" section. Of the real actions the best one is kept (highest
+    priority, then first); the rest become plain "other ideas" in the note."""
+    offers = [a["text"] for a in actions if LOW_PRIORITY_RE.search(a["text"])]
+    real = [a for a in actions if not LOW_PRIORITY_RE.search(a["text"])]
+    ranked = sorted(real, key=lambda a: PRIORITY_RANK[a["priority"]])      # stable
+    return ranked[:MAX_ACTIONS], ranked[MAX_ACTIONS:], offers
 
 
 def limit_actions(actions: list[dict]) -> list[dict]:
-    """Keep the first MAX_ACTIONS real actions. Creator offers ("comment X", "link in
-    bio") don't count: they stay as low-priority backups for a missing link."""
-    kept, real = [], 0
-    for a in actions:
-        offer = bool(LOW_PRIORITY_RE.search(a["text"]))
-        if offer or real < MAX_ACTIONS:
-            kept.append(a)
-            real += not offer
-    return kept
+    """Just the kept actions of split_actions()."""
+    return split_actions(actions)[0]
 
 
 # Actions/points that only send you to the creator: "comment 'MEMORY' to get the link",
@@ -257,7 +306,8 @@ def clean_claims(items) -> list[dict]:
 
 def action_line(action: dict) -> str:
     """'- [ ] 🔥 Do the thing' — the icon after the checkbox stores the priority."""
-    return f"- [ ] {PRIORITY_ICON[action['priority']]}{action['text']}"
+    return (f"- [ ] {PRIORITY_ICON[action['priority']]}"
+            f"{kind_icon(action.get('kind', ''))}{action['text']}")
 
 
 def split_priority(text: str) -> tuple[str, str]:
@@ -276,7 +326,8 @@ def creator_offers(texts: list[str]) -> list[str]:
 def creator_offer_lines(data: dict) -> list[str]:
     """'## From the creator': who made it and how they offer the links, as a backup
     if a link in this note is wrong or missing."""
-    offers = creator_offers([a["text"] for a in data.get("action_items", [])]
+    offers = creator_offers(list(data.get("creator_offers", []))
+                            + [a["text"] for a in data.get("action_items", [])]
                             + list(data.get("key_points", [])))
     if not offers:
         return []
@@ -286,6 +337,14 @@ def creator_offer_lines(data: dict) -> list[str]:
     lines += [f"- Offer: {o}" for o in dict.fromkeys(offers)]
     lines.append("- Use this if a link in this note is wrong or missing.")
     return lines + [""]
+
+
+def other_ideas_lines(data: dict) -> list[str]:
+    """'## Other ideas': the extra actions. Plain bullets, not on the to-do list."""
+    ideas = [i for i in data.get("other_ideas", []) if i]
+    if not ideas:
+        return []
+    return ["## Other ideas", *[f"- {i}" for i in ideas], ""]
 
 
 def claims_lines(data: dict) -> list[str]:
@@ -375,7 +434,8 @@ NOTE_SCHEMA = _obj({
     "key_points": {"type": "array", "items": _STR},
     "resources": {"type": "array", "items": _obj({"name": _STR, "link": _STR})},
     "action_items": {"type": "array", "items": _obj({
-        "text": _STR, "priority": {"type": "string", "enum": ["high", "normal", "low"]}})},
+        "text": _STR, "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+        "type": {"type": "string", "enum": list(KIND_ICON)}})},
     "claims": {"type": "array", "items": _obj({"claim": _STR, "why": _STR})},
     "quote": _STR, "lesson": _STR, "habit": _STR,
 }, required=["title", "category", "tags", "summary", "key_points", "resources",
@@ -396,7 +456,9 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     if not data:
         raise RuntimeError("The AI gave no usable answer. Send the link again or try /redo.")
     clean_note_fields(data)       # wrong types can't crash the note any more
-    data["action_items"] = limit_actions(clean_actions(data.get("action_items", [])))
+    data["action_items"], extras, data["creator_offers"] = split_actions(
+        clean_actions(data.get("action_items", [])))
+    data["other_ideas"] = [a["text"] for a in extras]
     data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)
     data["tags"] = clean_tags(data.get("tags", []))
@@ -662,6 +724,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
         "## Action items",
         *[action_line(a) for a in data["action_items"]],
         "",
+        *other_ideas_lines(data),
         "## Transcript",
         transcript or "(no speech)",
         "",
@@ -948,6 +1011,8 @@ def open_actions() -> list[dict]:
     for note in sorted(NOTES_DIR.glob("*.md")):
         lines = note.read_text(encoding="utf-8").splitlines()
         title = lines[0].lstrip("# ").strip() if lines else note.stem
+        category = next((ln[len("- Category: "):].strip() for ln in lines[:8]
+                         if ln.startswith("- Category: ")), "")
         section = ""
         for i, line in enumerate(lines):
             if line.startswith("## "):
@@ -955,10 +1020,13 @@ def open_actions() -> list[dict]:
             # Only real action items count, not "- [ ]" text inside a transcript/caption
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 priority, text = split_priority(line[6:].strip())
+                stored_kind, text = split_kind(text)
                 text, due = split_due(text)
                 repeat = sum(r["path"] == note and r["action"] == text for r in results) + 1
                 results.append({"path": note, "line": i, "title": title, "section": section,
                                 "action": text, "priority": priority, "due": due,
+                                "kind": stored_kind or guess_kind(text, category),
+                                "kind_saved": bool(stored_kind),
                                 "id": action_key(note, text, repeat)})
     today = date.today()
     # Due soon (overdue, today, next 2 days) first, soonest first; then by priority.
@@ -992,7 +1060,9 @@ def is_due_soon(action: dict, today: date | None = None) -> bool:
 def todo_line(action: dict, priority: str | None = None, due: date | None | str = "keep") -> str:
     """Rebuild a '- [ ]' line, keeping (or changing) the priority and due date."""
     due = action.get("due") if due == "keep" else due
-    line = "- [ ] " + PRIORITY_ICON[priority or action["priority"]] + action["action"]
+    saved = action["kind"] if action.get("kind_saved") else ""      # older lines stay as they are
+    line = ("- [ ] " + PRIORITY_ICON[priority or action["priority"]]
+            + kind_icon(saved) + action["action"])
     return line + (f" 📅 {due:%Y-%m-%d}" if due else "")
 
 
@@ -1321,46 +1391,11 @@ def find_action(aid: str) -> tuple[int, dict] | None:
     return None
 
 
-def note_key(path: Path) -> str:
-    """Short id for a note (fits in a Telegram button)."""
-    import hashlib
-    return hashlib.md5(path.name.encode()).hexdigest()[:10]
-
-
 def note_actions(path: Path) -> list[dict]:
     """A note's open actions under '## Action items', in the order they are written."""
     mine = [a for a in open_actions()
             if a["path"] == path and a["section"] == "Action items"]
     return sorted(mine, key=lambda a: a["line"])
-
-
-def pick_action(aid: str, due: date) -> tuple[dict, int] | None:
-    """'This is the ONE action I will do from this note': make it 🔥 high with a due
-    date, and make the note's other open actions 🔽 low.
-    Returns (the action, how many others became low), or None if it's gone."""
-    found = find_action(aid)
-    if found is None:
-        return None
-    chosen = found[1]
-    lines = chosen["path"].read_text(encoding="utf-8").splitlines()
-    others = 0
-    for a in note_actions(chosen["path"]) or [chosen]:
-        if action_id(a) == action_id(chosen):
-            lines[a["line"]] = todo_line(a, priority="high", due=due)
-        else:
-            lines[a["line"]] = todo_line(a, priority="low")
-            others += 1
-    if chosen["section"] != "Action items":              # e.g. a "Habit to try"
-        lines[chosen["line"]] = todo_line(chosen, priority="high", due=due)
-    chosen["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return chosen, others
-
-
-def skip_note_actions(key: str) -> list[str]:
-    """'Nothing to do from this note': skip all its open actions (kept as '- [-]')."""
-    numbers = [n for n, a in enumerate(open_actions(), start=1)
-               if note_key(a["path"]) == key and a["section"] == "Action items"]
-    return complete_actions(numbers, "-") if numbers else []
 
 
 def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:
@@ -1750,7 +1785,7 @@ ACT_AS = {
 def plan_parts(path: Path) -> dict:
     """What a plan needs from one note (only the note's own content)."""
     s = note_sections(path)
-    actions = [split_due(re.sub(r"^- \[ \] (🔥 |🔽 )?", "", line))[0] for line in
+    actions = [split_due(re.sub(r"^- \[ \] (?:🔥 |🔽 )?(?:[🤖🧠🔗] )?", "", line))[0] for line in
                s.get("Action items", []) + s.get("Habit to try", [])
                if line.startswith("- [ ] ")]
     # "Comment X / DM me / link in bio" are ways to reach the creator: Claude can't do
