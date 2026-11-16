@@ -804,3 +804,47 @@ def test_note_pipeline_records_timings(notes, monkeypatch, tmp_path, capsys):
     assert set(data["timings"]) == {"whisper", "ocr", "ai"}
     assert all(v >= 0 for v in data["timings"].values())
     assert "timing:" in capsys.readouterr().out
+
+
+# ---- stable action ids and /todo numbers ---------------------------------------
+
+def test_action_id_survives_moved_lines_priority_and_due(notes):
+    path = make_note(actions=["Read the docs", "Install it"])
+    a = next(x for x in p.open_actions() if x["action"] == "Read the docs")
+    aid = p.action_id(a)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines.insert(3, "- Mood: good")                       # a hand edit moves every line down
+    path.write_text("\n".join(lines), encoding="utf-8")
+    n, found = p.find_action(aid)
+    assert found["action"] == "Read the docs"
+    p.set_priority([n], "high")
+    p.set_due([p.find_action(aid)[0]], p.date.today() + p.timedelta(days=30))
+    assert p.find_action(aid)[1]["priority"] == "high"    # same id after both changes
+
+
+def test_old_style_action_id_still_found(notes):
+    make_note(actions=["Read the docs"])
+    a = p.open_actions()[0]
+    old = p.legacy_action_id(a)
+    assert ":" in old and p.find_action(old)[1]["action"] == "Read the docs"
+
+
+def test_same_text_twice_gets_two_ids(notes):
+    make_note(actions=["Do it", "Do it"])
+    ids = [p.action_id(a) for a in p.open_actions()]
+    assert len(set(ids)) == 2
+
+
+def test_current_numbers_follow_the_list_you_saw(notes):
+    make_note(title="Old", actions=["Read the docs", "Try the demo"], source="https://x/1")
+    shown = [p.action_id(a) for a in p.open_actions()]             # what /todo showed
+    data = {"title": "New", "category": "tech", "summary": "s", "key_points": [], "resources": [],
+            "tags": [], "claims": [], "quote": "", "lesson": "", "habit": "",
+            "action_items": [{"text": "Install tool", "priority": "high"}]}
+    p.save_note(data, "", "", "https://x/2")                        # a new 🔥 action arrives
+    assert p.open_actions()[0]["action"] == "Install tool"          # the list has moved
+    assert p.complete_actions(p.current_numbers(shown, [1])) == ["Read the docs"]
+    assert p.current_numbers(shown, [1]) == []                      # already done: left out
+    assert p.complete_actions(p.current_numbers(shown, [2])) == ["Try the demo"]
+    assert p.current_numbers(None, [2, 5]) == [2, 5]                # no saved list: as typed
+    assert p.current_numbers(shown, [99]) == []

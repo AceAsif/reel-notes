@@ -389,7 +389,8 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
         if a["title"] != current_title:         # reel title inside the section
             current_title = a["title"]
             lines += [f"📌 {current_title}"]
-        bell = " 🔔" if processor.action_id(a) in reminded else ""
+        bell = " 🔔" if (processor.action_id(a) in reminded
+                        or processor.legacy_action_id(a) in reminded) else ""
         due = f"  {processor.due_label(a['due'])}" if a["due"] else ""
         icon = processor.PRIORITY_ICON[a["priority"]] if group(a) == "due" else ""
         lines.append(f"{n}. ☐ {icon}{a['action']}{due}{bell}")
@@ -407,6 +408,19 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
             row.append(InlineKeyboardButton("Next ➡️", callback_data=f"todo:{tag}:{page + 1}"))
         keyboard = InlineKeyboardMarkup([row])
     return "\n".join(lines)[:4000], keyboard
+
+
+def remember_todo(user_data: dict | None) -> None:
+    """Save the list as shown now. /done 3, /due 3, /remind 3... then mean the action
+    you SAW as number 3, even if a new note or a new day has moved the list."""
+    if user_data is not None:
+        user_data["todo_map"] = [processor.action_id(a) for a in processor.open_actions()]
+
+
+def shown_numbers(context, numbers: list[int]) -> list[int]:
+    """Numbers from your last /todo → where those actions are in the list now."""
+    user_data = getattr(context, "user_data", None) or {}
+    return processor.current_numbers(user_data.get("todo_map"), numbers)
 
 
 def due_text() -> str:
@@ -436,6 +450,7 @@ async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     level = next((a for a in args if a in LEVELS), None)
     page = next((int(a) for a in args if a.isdigit()), 1)
     text, keyboard = todo_page(page, level)
+    remember_todo(getattr(context, "user_data", None))
     await update.message.reply_text(text, reply_markup=keyboard)
 
 
@@ -447,6 +462,7 @@ async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     _, tag, page = query.data.split(":")
     text, keyboard = todo_page(int(page), None if tag == "all" else tag)
+    remember_todo(getattr(context, "user_data", None))
     try:
         await query.edit_message_text(text, reply_markup=keyboard)
     except Exception:
@@ -463,14 +479,14 @@ async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(
             f"Usage: /{command} 2  or  /{command} 1 3 4  (numbers come from /todo)")
         return
-    changed = processor.complete_actions(numbers, mark)
+    changed = processor.complete_actions(shown_numbers(context, numbers), mark)
     if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
     remaining = len(processor.open_actions())
     reply = [heading, *[f"• {t}" for t in changed], "",
-             f"{remaining} open items left. Numbers have changed, so send /todo again "
-             "before your next /done or /skip."]
+             f"{remaining} open items left. Your numbers stay the same until you "
+             "send /todo again."]
     await update.message.reply_text("\n".join(reply))
 
 
@@ -494,13 +510,13 @@ async def change_priority(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(
             f"Usage: /{level} 3  or  /{level} 1 4  (numbers come from /todo)")
         return
-    changed = processor.set_priority(numbers, level)
+    changed = processor.set_priority(shown_numbers(context, numbers), level)
     if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
     icon = {"high": "🔥", "normal": "▫️", "low": "🔽"}[level]
     reply = [f"{icon} Now {level} priority:", *[f"• {t}" for t in changed], "",
-             "The list order has changed, so send /todo before your next command."]
+             "Your numbers stay the same until you send /todo again."]
     await update.message.reply_text("\n".join(reply))
 
 
@@ -524,6 +540,7 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines = ["📅 Actions with a due date:"]
         lines += [f"{n}. {a['action']}  {processor.due_label(a['due'])}"
                   for n, a in overdue + coming + later]
+        remember_todo(getattr(context, "user_data", None))          # these numbers are the newest ones shown
         await update.message.reply_text("\n".join(lines)[:4000])
         return
     if not when:
@@ -531,7 +548,7 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                         "/due 3 in 5 days. Remove it: /due 3 off")
         return
     if when.lower() in ("off", "none", "clear", "remove"):
-        changed = processor.set_due(numbers, None)
+        changed = processor.set_due(shown_numbers(context, numbers), None)
         msg = "🗑 Removed the due date from:" if changed else "No action with that number."
     else:
         day = processor.parse_due(when)
@@ -540,11 +557,11 @@ async def due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"I don't understand “{when}” (or it's in the past). Try: friday, tomorrow, "
                 "next week, in 3 days, 20/11, 2026-11-20")
             return
-        changed = processor.set_due(numbers, day)
+        changed = processor.set_due(shown_numbers(context, numbers), day)
         msg = f"📅 Due {processor.due_label(day)[2:]}:" if changed else "No action with that number."
     lines = [msg] + [f"• {t}" for t in changed]
     if changed:
-        lines.append("\nNumbers in /todo may change (due-soon actions move to the top).")
+        lines.append("\nYour numbers stay the same until you send /todo again.")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -980,7 +997,8 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                         + REMIND_EXAMPLES)
         return
     actions = processor.open_actions()
-    n = int(args[0])
+    now_numbers = shown_numbers(context, [int(args[0])])
+    n = now_numbers[0] if now_numbers else 0
     if not 1 <= n <= len(actions):
         await update.message.reply_text("No action with that number. Send /todo to see the list.")
         return
@@ -1175,6 +1193,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if processor.notes_ready():       # the review shows /todo numbers: remember them
+        remember_todo(context.application.user_data[context.job.chat_id])
     await context.bot.send_message(
         chat_id=context.job.chat_id,
         text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],

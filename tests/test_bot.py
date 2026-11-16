@@ -416,3 +416,30 @@ def test_video_with_caption_saves_link_as_source(tmp_path, monkeypatch):
     upd = types.SimpleNamespace(message=FakeVideoMsg("just words"), effective_user=types.SimpleNamespace(id=1))
     asyncio.run(bot.handle_video(upd, None))
     assert calls == [("", "just words")]
+
+
+# ---- /todo numbers stay the same until the next /todo ----------------------------
+
+def test_done_uses_numbers_from_last_todo(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    def save(title, action, priority, source):
+        data = {"title": title, "category": "tech", "summary": "s", "key_points": [],
+                "resources": [], "tags": [], "claims": [], "quote": "", "lesson": "", "habit": "",
+                "action_items": [{"text": action, "priority": priority}]}
+        return bot.processor.save_note(data, "", "", source)
+    old = save("Old", "Read the docs", "normal", "https://x/1")
+    context = types.SimpleNamespace(args=[], user_data={})
+    def update():
+        return types.SimpleNamespace(message=FakeMessage(""), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.todo(update(), context))                 # shows "1. Read the docs"
+    save("New", "Install tool", "high", "https://x/2")       # a new 🔥 action moves the list
+    context.args = ["1"]
+    upd = update()
+    asyncio.run(bot.done(upd, context))
+    assert "Read the docs" in upd.message.replies[-1]
+    assert "- [x] Read the docs" in old.read_text(encoding="utf-8")
+    assert [a["action"] for a in bot.processor.open_actions()] == ["Install tool"]
+    upd = update()                                            # number 1 is gone now
+    asyncio.run(bot.done(upd, context))
+    assert "No matching numbers" in upd.message.replies[-1]

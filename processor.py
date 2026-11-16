@@ -935,8 +935,10 @@ def open_actions() -> list[dict]:
             elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
                 priority, text = split_priority(line[6:].strip())
                 text, due = split_due(text)
-                results.append({"path": note, "line": i, "title": title,
-                                "action": text, "priority": priority, "due": due})
+                repeat = sum(r["path"] == note and r["action"] == text for r in results) + 1
+                results.append({"path": note, "line": i, "title": title, "section": section,
+                                "action": text, "priority": priority, "due": due,
+                                "id": action_key(note, text, repeat)})
     today = date.today()
     # Due soon (overdue, today, next 2 days) first, soonest first; then by priority.
     # sort() is stable, so notes keep their order inside each group.
@@ -1267,20 +1269,47 @@ def month_range(today: date | None = None, previous: bool = False) -> tuple[date
 
 # ---- daily nudge ----------------------------------------------------------
 
+def action_key(path: Path, text: str, repeat: int = 1) -> str:
+    """Id made from the note's file name + the action's text (not its line number),
+    so it stays the same when lines move, or the priority or due date changes.
+    `repeat` tells apart the same text written twice in one note."""
+    import hashlib
+    key = hashlib.md5(f"{path.name}\n{text}".encode()).hexdigest()[:10]
+    return key if repeat <= 1 else f"{key}-{repeat}"
+
+
 def action_id(action: dict) -> str:
-    """Short, stable id for an action (fits in a Telegram button):
-    first 8 characters of the note's file-name hash + the line number."""
+    """Short, stable id for an action (fits in a Telegram button)."""
+    return action.get("id") or action_key(action["path"], action["action"])
+
+
+def legacy_action_id(action: dict) -> str:
+    """The old id (file-name hash + line number). Reminders saved before the
+    change still use it."""
     import hashlib
     return hashlib.md5(action["path"].name.encode()).hexdigest()[:8] + ":" + str(action["line"])
 
 
 def find_action(aid: str) -> tuple[int, dict] | None:
     """(position in /todo order starting at 1, action) for an id, or None if
-    it's already done/skipped/deleted."""
+    it's already done/skipped/deleted. Old 'hash:line' ids still work."""
+    old_style = ":" in aid
     for n, a in enumerate(open_actions(), start=1):
-        if action_id(a) == aid:
+        if action_id(a) == aid or (old_style and legacy_action_id(a) == aid):
             return n, a
     return None
+
+
+def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:
+    """Turn the numbers you SAW in your last /todo into today's /todo positions.
+
+    `shown_ids` = the action ids of that /todo list, in order. An action that is
+    already done or skipped is left out. With no saved list, numbers are used as-is."""
+    if not shown_ids:
+        return numbers
+    now = {action_id(a): n for n, a in enumerate(open_actions(), start=1)}
+    return [now[shown_ids[n - 1]] for n in numbers
+            if 1 <= n <= len(shown_ids) and shown_ids[n - 1] in now]
 
 
 def pick_nudge(after: str | None = None, today: date | None = None) -> dict | None:
@@ -1486,7 +1515,8 @@ def save_reminders(reminders: list[dict]) -> None:
 def add_reminder(action: dict, when: datetime) -> dict:
     """Remember to remind about an action. Stored by action_id, so it still
     points to the right action after /todo numbers change."""
-    reminders = [r for r in load_reminders() if r["action_id"] != action_id(action)]
+    reminders = [r for r in load_reminders()
+                 if r["action_id"] not in (action_id(action), legacy_action_id(action))]
     reminder = {"action_id": action_id(action), "text": action["action"],
                 "when": when.isoformat()}
     reminders.append(reminder)
