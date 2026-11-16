@@ -113,11 +113,34 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 - Add your own goal at the end: `/plan 1 3 get a data job`.
 - Long plans come as a `.txt` file. Attach it in Claude with 📎.
 
+## Pick one action
+
+- A new note asks the AI for **0 to 3 actions** only. A short list gets done.
+- Under each new note there are buttons: **⭐ A**, **⭐ B**, **⭐ C** and **🗑 None of them**.
+- Tap ⭐ for the ONE action you will do. It becomes 🔥 high and due tomorrow. The other actions from that note become 🔽 low.
+- Tap 🗑 if nothing is worth doing. The actions are skipped; the note stays.
+
+## Numbers in /todo
+
+- `/done 3`, `/skip 3`, `/high 3`, `/due 3 friday` and `/remind 3 friday` use the numbers from the **last `/todo` you saw**.
+- The numbers stay the same until you send `/todo` again, even if a new note arrives.
+
+## When the PC was off
+
+- The daily nudge, Sunday review, Wednesday "remember this?" and monthly summary are sent **when the PC is back** if their time was missed.
+- A missed daily nudge is sent only on the same day. yt-dlp is also checked once a day after start.
+- The bot remembers what it sent in `sent_jobs.json` (not committed to Git).
+
+## How long a note takes
+
+- Each new note ends with a line like `⏱ 88s (download 4 · listen 21 · read screen 48 · AI 14)`.
+- The same numbers are in `bot.log` (search for `timing:`). "listen" is Whisper, "read screen" is OCR.
+
 ## Due dates
 
 - `/due 3 friday` gives action 3 a due date. Also: `tomorrow`, `next week`, `in 5 days`, `20/11`, `2026-11-20`. Several at once: `/due 2 5 friday`.
 - `/due 3 off` removes it. `/due` on its own lists every action with a date.
-- Actions that are overdue or due in the next 2 days go to the top of `/todo` under **⏰ DUE SOON**, so their numbers change.
+- Actions that are overdue or due in the next 2 days go to the top of `/todo` under **⏰ DUE SOON**.
 - The morning nudge picks an overdue or due-today action first. The Sunday review lists overdue actions and what's due this week.
 - In the note it looks like `- [ ] 🔥 Learn Pandas 📅 2026-11-20` (the Obsidian Tasks format).
 
