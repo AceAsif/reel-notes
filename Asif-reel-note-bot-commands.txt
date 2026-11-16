@@ -28,3 +28,4 @@ health - Check that everything is working
 update - Update yt-dlp now
 due - Set a due date: /due 3 friday
 plan - Plan for Claude: /plan 2, /plan 1 3, /plan #tag
+cleanup - Skip junk and extra actions (asks first)

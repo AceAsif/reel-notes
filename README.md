@@ -113,12 +113,24 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 - Add your own goal at the end: `/plan 1 3 get a data job`.
 - Long plans come as a `.txt` file. Attach it in Claude with 📎.
 
-## Pick one action
+## One action per reel, with a type
 
-- A new note asks the AI for **0 to 3 actions** only. A short list gets done.
-- Under each new note there are buttons: **⭐ A**, **⭐ B**, **⭐ C** and **🗑 None of them**.
-- Tap ⭐ for the ONE action you will do. It becomes 🔥 high and due tomorrow. The other actions from that note become 🔽 low.
-- Tap 🗑 if nothing is worth doing. The actions are skipped; the note stays.
+- A new note keeps **one main action** (the best one). A short list gets done.
+- Extra ideas go into a plain **Other ideas** list in the note. They are not on `/todo`.
+- "Comment X to get the link", "DM me" and "link in bio" are **not** actions. They are saved under **From the creator** in case a link is missing.
+- Every action has a type:
+  - 🤖 an AI (Claude, ChatGPT...) can do it or help with it
+  - 🧠 a habit or mindset thing you do yourself
+  - 🔗 look something up, open a site, install or set up a tool
+- `/todo` shows the icon and the counts. Filter with `/todo ai`, `/todo habit` or `/todo lookup` (you can add `high` too, like `/todo ai high`).
+- Older notes have no saved type, so the bot guesses it from the words (no AI needed).
+
+## Clean up old actions
+
+- `/cleanup` shows what it would skip and asks first. Tap **Yes** to do it.
+- It skips: (1) old "comment X / DM me" actions, and (2) the extra actions in a note that has more than one. It keeps the best action per note, anything with a due date, and every "Habit to try".
+- Skipped actions stay in the note, marked ❌. Nothing is deleted.
+- The Sunday review suggests `/cleanup` when you have more than 30 open actions.
 
 ## Numbers in /todo
 

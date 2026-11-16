@@ -68,70 +68,21 @@ def format_reply(data: dict, note_path: Path) -> str:
                   for c in data["claims"]]
     if data["action_items"]:
         parts += ["", "✅ Action items:"]
-        parts += [f"{PICK_LETTERS[i] + '. ' if i < len(PICK_LETTERS) else '☐ '}"
-                  f"{processor.PRIORITY_ICON[a['priority']]}{a['text']}"
-                  for i, a in enumerate(data["action_items"])]
-        parts += ["", "👇 Tap ⭐ to pick ONE action to do. It becomes 🔥 and due tomorrow."]
+        parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}"
+                  f"{processor.kind_icon(a.get('kind', ''))}{a['text']}"
+                  for a in data["action_items"]]
+    if data.get("other_ideas"):
+        parts += ["", "💭 Other ideas (not on your to-do list):",
+                  *[f"• {i}" for i in data["other_ideas"]]]
     parts += ["", f"Saved: {note_path.name}"]
     if data.get("timings"):
         parts.append(f"⏱ {processor.timing_text(data['timings'])}")
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
 
 
-# ---- pick ONE action when a note is saved -------------------------------------------
-PICK_LETTERS = "ABCDEF"      # letters, so they are not mixed up with /todo numbers
-
-
-def pick_buttons(note_path: Path) -> InlineKeyboardMarkup | None:
-    """[⭐ A] [⭐ B] [⭐ C] / [🗑 None of them] under a new note (None if it has no actions)."""
-    actions = processor.note_actions(note_path)[:len(PICK_LETTERS)]
-    if not actions:
-        return None
-    stars = [InlineKeyboardButton(f"⭐ {PICK_LETTERS[i]}",
-                                  callback_data=f"pick:do:{processor.action_id(a)}")
-             for i, a in enumerate(actions)]
-    none = InlineKeyboardButton("🗑 None of them",
-                                callback_data=f"pick:none:{processor.note_key(note_path)}")
-    return InlineKeyboardMarkup([stars, [none]])
-
-
 async def send_note_reply(status, data: dict, note_path: Path) -> None:
-    """Show the finished note, with the pick-one buttons when it has actions."""
-    text, buttons = format_reply(data, note_path), pick_buttons(note_path)
-    if buttons:
-        await status.edit_text(text, reply_markup=buttons)
-    else:
-        await status.edit_text(text)
-
-
-async def pick_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """⭐ A / 🗑 None of them under a new note."""
-    query = update.callback_query
-    await query.answer()
-    if not is_allowed(update):
-        return
-    _, what, key = query.data.split(":", 2)
-    if what == "none":
-        skipped = processor.skip_note_actions(key)
-        reply = (f"🗑 OK. Skipped {len(skipped)} action{'s' * (len(skipped) != 1)} from this note. "
-                 "The note is still saved." if skipped
-                 else "These actions are already done or skipped.")
-    else:
-        tomorrow = datetime.datetime.now(TIMEZONE).date() + datetime.timedelta(days=1)
-        picked = processor.pick_action(key, tomorrow)
-        if picked is None:
-            reply = "This action is already done or skipped."
-        else:
-            action, others = picked
-            reply = f"⭐ Your one action from this note:\n🔥 {action['action']}\n📅 Due tomorrow."
-            if others:
-                reply += f"\n\nThe other {others} from this note {'is' if others == 1 else 'are'} now 🔽 low."
-            reply += "\n\nFinished it? Send /todo, then /done and its number."
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)   # the choice is made
-    except Exception:
-        pass
-    await query.message.reply_text(reply)
+    """Show the finished note."""
+    await status.edit_text(format_reply(data, note_path))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
+        "Actions: /todo  /cleanup  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
@@ -414,17 +365,21 @@ TODO_PAGE_SIZE = 10
 LEVELS = ("high", "normal", "low")
 
 
-def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
+def todo_page(page: int = 1, level: str | None = None,
+              kind: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
     """One page of /todo (10 actions). Numbers are the real /todo numbers, so
-    /done 23 works from any page. level='high' shows only 🔥 actions."""
+    /done 23 works from any page. level='high' shows only 🔥 actions; kind='ai'
+    (or 'habit', 'lookup') shows only that type."""
     if not processor.notes_ready():
         return processor.NOTES_MISSING, None
     all_actions = list(enumerate(processor.open_actions(), start=1))
     if not all_actions:
         return "🎉 No open action items.", None
-    items = [(n, a) for n, a in all_actions if level is None or a["priority"] == level]
+    items = [(n, a) for n, a in all_actions
+             if (level is None or a["priority"] == level) and (kind is None or a["kind"] == kind)]
     if not items:
-        return f"No {level} priority actions. See everything with /todo", None
+        which = " ".join(x for x in (level and f"{level} priority", kind and processor.KIND_LABEL[kind]) if x)
+        return f"No {which} actions. See everything with /todo", None
     pages = (len(items) + TODO_PAGE_SIZE - 1) // TODO_PAGE_SIZE
     page = max(1, min(page, pages))
     shown = items[(page - 1) * TODO_PAGE_SIZE: page * TODO_PAGE_SIZE]
@@ -435,10 +390,13 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
         return "due" if processor.is_due_soon(a) else a["priority"]
     reminded = {r["action_id"] for r in processor.load_reminders()}
     counts = {lv: sum(a["priority"] == lv for _, a in all_actions) for lv in LEVELS}
-    what = f"{level} priority " if level else ""
+    what = (f"{level} priority " if level else "") + (f"{processor.kind_icon(kind)}" if kind else "")
+    kinds = {k: sum(a["kind"] == k for _, a in all_actions) for k in processor.KIND_ICON}
     lines = [f"📋 {len(items)} open {what}actions"
              + (f" (page {page}/{pages})" if pages > 1 else "") + ":",
-             f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low"]
+             f"🔥 {counts['high']} high · ▫️ {counts['normal']} normal · 🔽 {counts['low']} low",
+             " · ".join(f"{processor.KIND_ICON[k]} {kinds[k]} {processor.KIND_LABEL[k].lower()}"
+                        for k in processor.KIND_ICON)]
     current_priority, current_title = None, None
     for n, a in shown:
         if group(a) != current_priority:        # due-soon / priority section
@@ -451,13 +409,14 @@ def todo_page(page: int = 1, level: str | None = None) -> tuple[str, InlineKeybo
                         or processor.legacy_action_id(a) in reminded) else ""
         due = f"  {processor.due_label(a['due'])}" if a["due"] else ""
         icon = processor.PRIORITY_ICON[a["priority"]] if group(a) == "due" else ""
-        lines.append(f"{n}. ☐ {icon}{a['action']}{due}{bell}")
+        lines.append(f"{n}. ☐ {icon}{processor.kind_icon(a['kind'])}{a['action']}{due}{bell}")
     lines += ["", "/done 2 · /skip 3 · /high 3 · /low 3 · /due 3 friday · /remind 3 friday",
-              "Only 🔥 ones: /todo high"]
+              "Only 🔥: /todo high · Only 🤖: /todo ai · 🧠: /todo habit · 🔗: /todo lookup",
+              "Too many? /cleanup"]
 
     keyboard = None
     if pages > 1:
-        tag = level or "all"
+        tag = ",".join(x for x in (level, kind) if x) or "all"
         row = []
         if page > 1:
             row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"todo:{tag}:{page - 1}"))
@@ -506,8 +465,9 @@ async def todo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     args = [a.lower() for a in (context.args or [])]
     level = next((a for a in args if a in LEVELS), None)
+    kind = next((a for a in args if a in processor.KIND_ICON), None)
     page = next((int(a) for a in args if a.isdigit()), 1)
-    text, keyboard = todo_page(page, level)
+    text, keyboard = todo_page(page, level, kind)
     remember_todo(getattr(context, "user_data", None))
     await update.message.reply_text(text, reply_markup=keyboard)
 
@@ -519,7 +479,10 @@ async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_allowed(update):
         return
     _, tag, page = query.data.split(":")
-    text, keyboard = todo_page(int(page), None if tag == "all" else tag)
+    parts = tag.split(",")
+    level = next((x for x in parts if x in LEVELS), None)
+    kind = next((x for x in parts if x in processor.KIND_ICON), None)
+    text, keyboard = todo_page(int(page), level, kind)
     remember_todo(getattr(context, "user_data", None))
     try:
         await query.edit_message_text(text, reply_markup=keyboard)
@@ -1252,12 +1215,78 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(stats_text())
 
 
+CLEANUP_HINT_OVER = 30          # the Sunday review suggests /cleanup above this many open actions
+
+
+# ---- /cleanup: fewer open actions ---------------------------------------------------
+
+def cleanup_text(plan: dict) -> str:
+    skip = len(plan["ids"])
+    return ("🧹 Clean-up\n\n"
+            f"You have {plan['open']} open actions from {plan['notes']} notes.\n"
+            f"• {plan['junk']} are \"comment X / DM me\" offers. They are not real actions.\n"
+            f"• {plan['extras']} are extra actions from notes that have more than one. "
+            "I keep the best one per note, and anything with a due date.\n\n"
+            f"I would skip {skip} and keep {plan['left']}. "
+            "Skipped actions stay in the notes, marked ❌.")
+
+
+async def cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cleanup = skip junk and extra actions, after you confirm."""
+    if not is_allowed(update):
+        return
+    if not processor.notes_ready():
+        await update.message.reply_text(processor.NOTES_MISSING)
+        return
+    plan = processor.cleanup_plan()
+    if not plan["ids"]:
+        await update.message.reply_text(
+            f"🎉 Nothing to clean up. You have {plan['open']} open actions.")
+        return
+    buttons = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🧹 Yes, skip {len(plan['ids'])}", callback_data="cleanup:yes"),
+        InlineKeyboardButton("Cancel", callback_data="cleanup:no")]])
+    await update.message.reply_text(cleanup_text(plan), reply_markup=buttons)
+
+
+async def cleanup_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    if query.data == "cleanup:yes":
+        # work out the list again now: the first message may be old
+        skipped = processor.skip_actions_by_id(processor.cleanup_plan()["ids"])
+        left = len(processor.open_actions())
+        reply = (f"🧹 Skipped {len(skipped)}. {left} open actions left. "
+                 "Send /todo to see them.") if skipped else "Nothing left to clean up."
+    else:
+        reply = "OK, nothing changed."
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await query.message.reply_text(reply)
+
+
+def cleanup_hint() -> str:
+    """One line for the weekly review when the list is long ('' otherwise)."""
+    if not processor.notes_ready():
+        return ""
+    plan = processor.cleanup_plan()
+    if plan["open"] > CLEANUP_HINT_OVER and plan["ids"]:
+        return (f"\n\n🧹 {plan['open']} open actions is a lot. "
+                f"Send /cleanup to skip {len(plan['ids'])} of them.")
+    return ""
+
+
 async def weekly_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     if processor.notes_ready():       # the review shows /todo numbers: remember them
         remember_todo(context.application.user_data[context.job.chat_id])
     await context.bot.send_message(
         chat_id=context.job.chat_id,
-        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text())[:4000],
+        text=("📅 Weekly review\n\n" + stats_text() + due_text() + "\n\n" + actions_text()
+              + cleanup_hint())[:4000],
     )
 
 
@@ -1349,6 +1378,8 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, ignore_edited), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
+    app.add_handler(CommandHandler("cleanup", cleanup))
+    app.add_handler(CallbackQueryHandler(cleanup_button_pressed, pattern=r"^cleanup:"))
     app.add_handler(CommandHandler("done", done))
     app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("high", high))
@@ -1359,7 +1390,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
-    app.add_handler(CallbackQueryHandler(pick_button_pressed, pattern=r"^pick:"))
     app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
     app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
