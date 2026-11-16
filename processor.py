@@ -92,6 +92,8 @@ covers ALL of them, with at least one key point per video.
 
 Always write every field in English, even if the transcript or on-screen text
 is in another language (e.g. Hindi or Hinglish); translate as needed.
+Write simple English: short sentences and easy words. Keep tool names, commands and
+links exactly as they are.
 
 Return ONLY a JSON object with these keys:
 - "title": short title (max 8 words)
@@ -101,17 +103,21 @@ Return ONLY a JSON object with these keys:
   "github", "claude", "productivity", "communication", "career", "security".
   <<EXISTING_TAGS>>
 - "summary": 2-3 sentences
-- "key_points": list of 4-7 specific, self-contained points. Someone who never watched
+- "key_points": list of 3-7 specific, self-contained points. Someone who never watched
   the video must be able to USE them. Keep the actual details: exact questions,
   steps, commands, numbers, research findings, names, and WHY it works.
+  If the video is a list, a roadmap or a step-by-step guide, keep EVERY step, in the
+  same order, one point per step (up to 15). Do not merge steps and do not drop any.
   Bad: "Ask about favorite memories". Good: "Ask: 'What is your favourite memory?'"
 - "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
   library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
   shown or said; never invent one. Use "" for link otherwise (never "N/A").
-- "action_items": list of 3-6 objects {"text": "...", "priority": "high" | "normal" | "low"}.
+- "action_items": list of 0-3 objects {"text": "...", "priority": "high" | "normal" | "low"}.
+  Fewer is better: I have little time, so give only actions that are really worth doing.
+  Use [] if nothing in the video is worth doing. Never add an action just to fill the list.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
-  When the video names several tools, give each useful tool its own action.
+  When the video names several tools, pick the one or two most useful ones.
   Priority: "high" = specific, quick (under ~30 min) and clearly useful;
   "low" = optional, vague, or just following/contacting the creator; otherwise "normal".
 - "claims": list of objects {"claim": "...", "why": "..."} for things I should NOT take
@@ -210,6 +216,21 @@ def clean_actions(items) -> list[dict]:
             priority = "low"
         result.append({"text": text, "priority": priority})
     return result
+
+
+MAX_ACTIONS = 3          # real actions kept per note: a short list gets done, a long one doesn't
+
+
+def limit_actions(actions: list[dict]) -> list[dict]:
+    """Keep the first MAX_ACTIONS real actions. Creator offers ("comment X", "link in
+    bio") don't count: they stay as low-priority backups for a missing link."""
+    kept, real = [], 0
+    for a in actions:
+        offer = bool(LOW_PRIORITY_RE.search(a["text"]))
+        if offer or real < MAX_ACTIONS:
+            kept.append(a)
+            real += not offer
+    return kept
 
 
 # Actions/points that only send you to the creator: "comment 'MEMORY' to get the link",
@@ -375,7 +396,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     if not data:
         raise RuntimeError("The AI gave no usable answer. Send the link again or try /redo.")
     clean_note_fields(data)       # wrong types can't crash the note any more
-    data["action_items"] = clean_actions(data.get("action_items", []))
+    data["action_items"] = limit_actions(clean_actions(data.get("action_items", [])))
     data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)
     data["tags"] = clean_tags(data.get("tags", []))
@@ -1298,6 +1319,48 @@ def find_action(aid: str) -> tuple[int, dict] | None:
         if action_id(a) == aid or (old_style and legacy_action_id(a) == aid):
             return n, a
     return None
+
+
+def note_key(path: Path) -> str:
+    """Short id for a note (fits in a Telegram button)."""
+    import hashlib
+    return hashlib.md5(path.name.encode()).hexdigest()[:10]
+
+
+def note_actions(path: Path) -> list[dict]:
+    """A note's open actions under '## Action items', in the order they are written."""
+    mine = [a for a in open_actions()
+            if a["path"] == path and a["section"] == "Action items"]
+    return sorted(mine, key=lambda a: a["line"])
+
+
+def pick_action(aid: str, due: date) -> tuple[dict, int] | None:
+    """'This is the ONE action I will do from this note': make it 🔥 high with a due
+    date, and make the note's other open actions 🔽 low.
+    Returns (the action, how many others became low), or None if it's gone."""
+    found = find_action(aid)
+    if found is None:
+        return None
+    chosen = found[1]
+    lines = chosen["path"].read_text(encoding="utf-8").splitlines()
+    others = 0
+    for a in note_actions(chosen["path"]) or [chosen]:
+        if action_id(a) == action_id(chosen):
+            lines[a["line"]] = todo_line(a, priority="high", due=due)
+        else:
+            lines[a["line"]] = todo_line(a, priority="low")
+            others += 1
+    if chosen["section"] != "Action items":              # e.g. a "Habit to try"
+        lines[chosen["line"]] = todo_line(chosen, priority="high", due=due)
+    chosen["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return chosen, others
+
+
+def skip_note_actions(key: str) -> list[str]:
+    """'Nothing to do from this note': skip all its open actions (kept as '- [-]')."""
+    numbers = [n for n, a in enumerate(open_actions(), start=1)
+               if note_key(a["path"]) == key and a["section"] == "Action items"]
+    return complete_actions(numbers, "-") if numbers else []
 
 
 def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:

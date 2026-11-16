@@ -898,3 +898,48 @@ def test_sent_jobs_file(tmp_path, monkeypatch):
     assert p.load_sent_jobs() == {"nudge": "2026-11-16"}
     (tmp_path / "sent.json").write_text("not json")
     assert p.load_sent_jobs() == {}
+
+
+# ---- fewer actions, and pick ONE when a note is saved --------------------------------
+
+def test_prompt_asks_for_few_actions_all_steps_and_simple_english():
+    assert "list of 0-3 objects" in p.PROMPT and "Use [] if nothing" in p.PROMPT
+    assert "keep EVERY step" in p.PROMPT
+    assert "simple English" in p.PROMPT
+
+
+def test_limit_actions_keeps_three_real_ones_plus_creator_offers():
+    actions = p.clean_actions(["One", "Two", "Comment 'AI' to get the link", "Three", "Four"])
+    kept = [a["text"] for a in p.limit_actions(actions)]
+    assert kept == ["One", "Two", "Comment 'AI' to get the link", "Three"]
+
+
+def test_summarise_caps_actions(notes, monkeypatch):
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, schema=None: {
+        "title": "T", "category": "tech", "summary": "s", "key_points": ["k"], "resources": [],
+        "claims": [], "tags": [], "action_items": [{"text": f"Do {i}", "priority": "normal"}
+                                                    for i in range(6)]})
+    assert len(p.summarise("words", "", "")["action_items"]) == 3
+
+
+def test_pick_action_makes_one_high_and_the_rest_low(notes):
+    path = make_note(actions=[{"text": "Read docs", "priority": "high"}, "Install it", "Try demo"])
+    actions = p.note_actions(path)
+    assert [a["action"] for a in actions] == ["Read docs", "Install it", "Try demo"]   # note order
+    due = p.date.today() + p.timedelta(days=1)
+    chosen, others = p.pick_action(p.action_id(actions[1]), due)
+    assert chosen["action"] == "Install it" and others == 2
+    after = {a["action"]: a for a in p.open_actions()}
+    assert after["Install it"]["priority"] == "high" and after["Install it"]["due"] == due
+    assert after["Read docs"]["priority"] == "low" and after["Try demo"]["priority"] == "low"
+    assert p.open_actions()[0]["action"] == "Install it"          # top of /todo
+    p.complete_actions([1])
+    assert p.pick_action(p.action_id(actions[1]), due) is None     # already done
+
+
+def test_skip_note_actions_only_touches_that_note(notes):
+    one = make_note(title="One", actions=["A1", "A2"], source="https://x/1")
+    make_note(title="Two", actions=["B1"], source="https://x/2")
+    assert sorted(p.skip_note_actions(p.note_key(one))) == ["A1", "A2"]
+    assert [a["action"] for a in p.open_actions()] == ["B1"]
+    assert p.skip_note_actions(p.note_key(one)) == []

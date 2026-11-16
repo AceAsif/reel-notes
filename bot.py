@@ -68,12 +68,70 @@ def format_reply(data: dict, note_path: Path) -> str:
                   for c in data["claims"]]
     if data["action_items"]:
         parts += ["", "✅ Action items:"]
-        parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}{a['text']}"
-                  for a in data["action_items"]]
+        parts += [f"{PICK_LETTERS[i] + '. ' if i < len(PICK_LETTERS) else '☐ '}"
+                  f"{processor.PRIORITY_ICON[a['priority']]}{a['text']}"
+                  for i, a in enumerate(data["action_items"])]
+        parts += ["", "👇 Tap ⭐ to pick ONE action to do. It becomes 🔥 and due tomorrow."]
     parts += ["", f"Saved: {note_path.name}"]
     if data.get("timings"):
         parts.append(f"⏱ {processor.timing_text(data['timings'])}")
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
+
+
+# ---- pick ONE action when a note is saved -------------------------------------------
+PICK_LETTERS = "ABCDEF"      # letters, so they are not mixed up with /todo numbers
+
+
+def pick_buttons(note_path: Path) -> InlineKeyboardMarkup | None:
+    """[⭐ A] [⭐ B] [⭐ C] / [🗑 None of them] under a new note (None if it has no actions)."""
+    actions = processor.note_actions(note_path)[:len(PICK_LETTERS)]
+    if not actions:
+        return None
+    stars = [InlineKeyboardButton(f"⭐ {PICK_LETTERS[i]}",
+                                  callback_data=f"pick:do:{processor.action_id(a)}")
+             for i, a in enumerate(actions)]
+    none = InlineKeyboardButton("🗑 None of them",
+                                callback_data=f"pick:none:{processor.note_key(note_path)}")
+    return InlineKeyboardMarkup([stars, [none]])
+
+
+async def send_note_reply(status, data: dict, note_path: Path) -> None:
+    """Show the finished note, with the pick-one buttons when it has actions."""
+    text, buttons = format_reply(data, note_path), pick_buttons(note_path)
+    if buttons:
+        await status.edit_text(text, reply_markup=buttons)
+    else:
+        await status.edit_text(text)
+
+
+async def pick_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⭐ A / 🗑 None of them under a new note."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    _, what, key = query.data.split(":", 2)
+    if what == "none":
+        skipped = processor.skip_note_actions(key)
+        reply = (f"🗑 OK. Skipped {len(skipped)} action{'s' * (len(skipped) != 1)} from this note. "
+                 "The note is still saved." if skipped
+                 else "These actions are already done or skipped.")
+    else:
+        tomorrow = datetime.datetime.now(TIMEZONE).date() + datetime.timedelta(days=1)
+        picked = processor.pick_action(key, tomorrow)
+        if picked is None:
+            reply = "This action is already done or skipped."
+        else:
+            action, others = picked
+            reply = f"⭐ Your one action from this note:\n🔥 {action['action']}\n📅 Due tomorrow."
+            if others:
+                reply += f"\n\nThe other {others} from this note {'is' if others == 1 else 'are'} now 🔽 low."
+            reply += "\n\nFinished it? Send /todo, then /done and its number."
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)   # the choice is made
+    except Exception:
+        pass
+    await query.message.reply_text(reply)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -117,7 +175,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await status.edit_text(f"❌ Something went wrong: {exc}")
         return
 
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
 
 
 async def download(media, path: Path, tries: int = 3) -> None:
@@ -187,7 +245,7 @@ async def process_screenshots(msgs: list) -> None:
     except Exception as exc:
         await status.edit_text(f"❌ Something went wrong: {exc}")
         return
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
 
 
 LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
@@ -249,7 +307,7 @@ async def note_from_link(status, url: str) -> Path | None:
         )
         return None
 
-    await status.edit_text(format_reply(data, note_path))
+    await send_note_reply(status, data, note_path)
     return note_path
 
 
@@ -1301,6 +1359,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("notes", notes_list))
     app.add_handler(CommandHandler("tag", tag))
     app.add_handler(CallbackQueryHandler(tag_button_pressed, pattern=r"^tag:"))
+    app.add_handler(CallbackQueryHandler(pick_button_pressed, pattern=r"^pick:"))
     app.add_handler(CallbackQueryHandler(nudge_button_pressed, pattern=r"^nudge:"))
     app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
