@@ -433,7 +433,7 @@ def repo_fields(d: dict) -> dict:
 def repo_info(owner: str, name: str) -> dict | None:
     """Repo details for owner/name. {'missing': True} if GitHub says it doesn't exist
     (wrong link), None if GitHub couldn't be asked (offline, rate limit)."""
-    name = name.removesuffix(".git")
+    name = name.rstrip(".,;:)!?]").removesuffix(".git")   # 'repo.' at the end of a sentence
     status, d = github_request(f"/repos/{owner}/{name}")
     if status == 200 and d and "html_url" in d:
         return repo_fields(d)
@@ -565,6 +565,10 @@ def drop_invented_links(resources: list, source_text: str) -> list:
     return resources
 
 
+# 'strix.ai/docs', 'github.com/a/b', 'www.nas.com': no spaces, a dot, a real ending
+BARE_DOMAIN_RE = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#]\S*)?$", re.I)
+
+
 def resource_line(r, category: str = "") -> str:
     """Name + link. If there's no real URL, add a search link:
     GitHub when the video talks about code, Google for everything else."""
@@ -572,6 +576,8 @@ def resource_line(r, category: str = "") -> str:
         return str(r)
     name = str(r.get("name", "")).strip()
     link = str(r.get("link", "")).strip()
+    if link and not link.lower().startswith("http") and BARE_DOMAIN_RE.match(link):
+        link = "https://" + link                  # 'strix.ai/docs' is a real link
     if not link.lower().startswith("http"):
         if r.get("search") == "github":
             link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
@@ -1034,6 +1040,14 @@ def read_tags(path: Path) -> list[str]:
     return []
 
 
+def notes_ready() -> bool:
+    """False when the notes folder can't be seen (e.g. Google Drive not started yet)."""
+    return NOTES_DIR.is_dir()
+
+
+NOTES_MISSING = "📁 I can't see your notes folder. Is Google Drive running?"
+
+
 def notes_with_tag(tag: str) -> list[Path]:
     """Notes tagged exactly `tag`, or with tags starting with it
     (so /tag ai finds #ai and #ai-tools). Newest first."""
@@ -1081,11 +1095,14 @@ def tag_untagged_notes() -> list[tuple[str, list[str]]]:
         tags = clean_tags(ask_ollama_json(prompt).get("tags", []))
         if not tags:
             continue
-        # Put the Tags line after the other '- Key: value' header lines
-        i = 2
-        while i < len(lines) and lines[i].startswith("- "):
-            i += 1
-        lines.insert(i, tags_line(tags))
+        existing_line = next((i for i, ln in enumerate(lines[:12]) if ln.startswith("- Tags:")), None)
+        if existing_line is not None:           # an empty '- Tags:' line: fill it in
+            lines[existing_line] = tags_line(tags)
+        else:                                   # after the other '- Key: value' header lines
+            i = 2
+            while i < len(lines) and lines[i].startswith("- "):
+                i += 1
+            lines.insert(i, tags_line(tags))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         title = lines[0].lstrip("# ").strip()
         done.append((title, tags))

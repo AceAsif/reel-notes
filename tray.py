@@ -21,7 +21,12 @@ from PIL import Image, ImageDraw
 
 HERE = Path(__file__).resolve().parent
 LOG = HERE / "bot.log"
-NOTES = HERE / "notes"
+try:                       # use the same notes folder as the bot (NOTES_DIR in .env)
+    from dotenv import load_dotenv
+    load_dotenv(HERE / ".env")
+except ImportError:
+    pass
+NOTES = Path(os.getenv("NOTES_DIR") or HERE / "notes")
 PYTHON = HERE / ".venv" / "Scripts" / "python.exe"
 if not PYTHON.exists():
     PYTHON = Path(sys.executable)
@@ -123,7 +128,8 @@ class BotRunner:
 
     # ---- menu actions --------------------------------------------------
     def open_notes(self, *_):
-        NOTES.mkdir(exist_ok=True)
+        if not NOTES.is_dir():          # e.g. Google Drive not started: don't create a fake folder
+            return
         os.startfile(NOTES)
 
     def open_log(self, *_):

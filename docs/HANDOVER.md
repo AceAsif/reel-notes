@@ -56,7 +56,7 @@ processor.py ── all logic (no Telegram code)
 | `bot.py` (~1280 lines) | Telegram layer: handlers, inline buttons, jobs, formatting replies |
 | `processor.py` (~1770 lines) | Everything else (see section 5) |
 | `tray.py` | Windows tray icon: start/stop the bot, open log |
-| `tests/` | pytest, 147 tests (stubs for pytesseract and faster_whisper) |
+| `tests/` | pytest, 166 tests (stubs for pytesseract and faster_whisper) |
 | `PROGRESS.md` | Checkpoint file for the current task (see "checkpoint-and-report" workflow) |
 | `.env` | Settings (see section 8) |
 
@@ -185,7 +185,7 @@ Big: always-on hosting (VPS/Raspberry Pi) while staying free/private.
 python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt
 copy .env.example .env      # fill in token and ALLOWED_USER_ID
 python bot.py               # or run tray.py
-pip install -r requirements-dev.txt ; python -m pytest      # 147 tests, no network needed
+pip install -r requirements-dev.txt ; python -m pytest      # 166 tests, no network needed
 ```
 
 Tests use stubs for `pytesseract` and `faster_whisper`; Ollama and GitHub calls are

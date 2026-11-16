@@ -739,3 +739,46 @@ def test_summarise_saves_note_when_model_returns_nulls(monkeypatch, tmp_path):
     data = p.summarise("hello", "", "")
     path = p.save_note(data, "hello", "", "https://x.com/a")
     assert "# Untitled reel" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("link,shown", [
+    ("strix.ai/docs", "https://strix.ai/docs"),
+    ("www.nas.com", "https://www.nas.com"),
+    ("github.com/a/b", "https://github.com/a/b"),
+    ("https://x.com/a", "https://x.com/a"),
+])
+def test_link_shown_without_https_is_kept(link, shown):
+    assert shown in p.resource_line({"name": "T", "link": link}, "tech")
+
+
+def test_not_a_link_still_gets_search():
+    assert "google.com/search" in p.resource_line({"name": "T", "link": "install it"}, "other")
+    assert "google.com/search" in p.resource_line({"name": "T", "link": "Muse"}, "other")
+
+
+def test_repo_name_at_end_of_sentence(monkeypatch):
+    seen = []
+    def fake(path, params=None):
+        seen.append(path)
+        return 200, {"html_url": "https://github.com/a/repo", "stargazers_count": 1}
+    monkeypatch.setattr(p, "github_request", fake)
+    assert p.repo_info("a", "repo.")["link"].endswith("a/repo")
+    assert seen == ["/repos/a/repo"]
+
+
+def test_retag_fills_empty_tags_line_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    note = tmp_path / "2026-11-10_0900_a.md"
+    note.write_text("# A\n\n- Date: x\n- Tags: \n\n## Summary\nHi\n", encoding="utf-8")
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, **k: {"tags": ["python"]})
+    for _ in range(2):                                  # a second /retag must change nothing
+        p.tag_untagged_notes()
+    text = note.read_text(encoding="utf-8")
+    assert text.count("- Tags:") == 1 and "- Tags: #python" in text
+
+
+def test_notes_ready(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path / "missing")
+    assert not p.notes_ready()
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    assert p.notes_ready()

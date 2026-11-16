@@ -358,3 +358,61 @@ def test_plan_notes_selection(tmp_path, monkeypatch):
     assert "No notes tagged" in bot.plan_notes(ctx, ["#nothing"])[2]
     assert "Usage" in bot.plan_notes(ctx, ["9"])[2]
     assert bot.plan_notes(ctx, [])[0][0].name.startswith("2026-11-13")     # newest by default
+
+
+def test_edited_messages_are_ignored():
+    from datetime import datetime
+    from telegram import Chat, Message, Update, User
+    bot.TOKEN = "123:ABC"
+    app = bot.build_app()
+    app.bot._bot_user = User(999, "Reel Notes", True, username="test_reel_bot")
+    msg = Message(1, datetime.now(), Chat(1, "private"), from_user=User(1, "me", False), text="/done 2")
+    upd = Update(1, edited_message=msg)
+    upd.set_bot(app.bot)
+    first_group = sorted(app.handlers)[0]
+    assert first_group == -1
+    assert any(h.check_update(upd) for h in app.handlers[-1])
+    normal = Update(2, message=msg)
+    normal.set_bot(app.bot)
+    assert not any(h.check_update(normal) for h in app.handlers[-1])
+
+
+def test_todo_and_notes_when_folder_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path / "missing")
+    text, kb = bot.todo_page(1)
+    assert "Google Drive" in text and kb is None
+    msg = FakeMessage("/notes")
+    upd = types.SimpleNamespace(message=msg, effective_user=types.SimpleNamespace(id=1))
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    asyncio.run(bot.notes_list(upd, types.SimpleNamespace(user_data={})))
+    assert "Google Drive" in msg.replies[-1]
+    sent = []
+    async def send_message(chat, t): sent.append(t)
+    asyncio.run(bot.send_nudge(types.SimpleNamespace(send_message=send_message), 1, "hi"))
+    assert "Google Drive" in sent[0]
+
+
+class FakeVideoMsg(FakeShot):
+    def __init__(self, caption):
+        super().__init__(caption)
+        self.video = types.SimpleNamespace(file_size=1000, get_file=self._file)
+        self.document = None
+
+
+def test_video_with_caption_saves_link_as_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    calls = []
+    def fake(videos, source, caption):
+        calls.append((source, caption))
+        return Path("n.md"), {}
+    monkeypatch.setattr(bot.processor, "process_videos", fake)
+    monkeypatch.setattr(bot, "format_reply", lambda d, p: "ok")
+    cap = "Great tip! https://www.instagram.com/reel/ABC/ #ai"
+    upd = types.SimpleNamespace(message=FakeVideoMsg(cap), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.handle_video(upd, None))
+    assert calls == [("https://www.instagram.com/reel/ABC/", cap)]
+    calls.clear()
+    upd = types.SimpleNamespace(message=FakeVideoMsg("just words"), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.handle_video(upd, None))
+    assert calls == [("", "just words")]
