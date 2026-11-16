@@ -782,3 +782,25 @@ def test_notes_ready(tmp_path, monkeypatch):
     assert not p.notes_ready()
     monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
     assert p.notes_ready()
+
+
+# ---- timing ------------------------------------------------------------------
+
+def test_timing_text():
+    assert p.timing_text({"download": 4.2, "whisper": 21, "ocr": 48.4, "ai": 14}) == \
+        "88s (download 4 · listen 21 · read screen 48 · AI 14)"
+    assert p.timing_text({"whisper": 0, "ocr": 2, "ai": 3}) == "5s (listen 0 · read screen 2 · AI 3)"
+
+
+def test_note_pipeline_records_timings(notes, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(p, "transcribe", lambda v: ("spoken words", "en"))
+    monkeypatch.setattr(p, "screen_text", lambda v, w: "on screen")
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, schema=None: {
+        "title": "Timed", "category": "tech", "summary": "s", "key_points": ["k"],
+        "resources": [], "action_items": [], "claims": [], "tags": []})
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"x")
+    _, data = p.process_videos([video], "https://x/t")
+    assert set(data["timings"]) == {"whisper", "ocr", "ai"}
+    assert all(v >= 0 for v in data["timings"].values())
+    assert "timing:" in capsys.readouterr().out

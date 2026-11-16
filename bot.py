@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -70,6 +71,8 @@ def format_reply(data: dict, note_path: Path) -> str:
         parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}{a['text']}"
                   for a in data["action_items"]]
     parts += ["", f"Saved: {note_path.name}"]
+    if data.get("timings"):
+        parts.append(f"⏱ {processor.timing_text(data['timings'])}")
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
 
 
@@ -220,8 +223,10 @@ async def note_from_link(status, url: str) -> Path | None:
     """Download + process a link, editing the status message as it goes."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
+            started = time.perf_counter()
             videos, caption, creator = await asyncio.to_thread(
                 processor.download_media, url, Path(tmp))
+            download_seconds = time.perf_counter() - started
             if len(videos) > 1:
                 photos = sum(v.suffix.lower() in processor.IMAGE_EXTS for v in videos)
                 kinds = processor.slide_summary(
@@ -233,6 +238,9 @@ async def note_from_link(status, url: str) -> Path | None:
                 await status.edit_text("Downloaded ⏳ Processing...")
             note_path, data = await asyncio.to_thread(
                 processor.process_videos, videos, url, caption, creator)
+            if data.get("timings") is not None:      # show the download time too
+                data["timings"] = {"download": download_seconds, **data["timings"]}
+                processor.log_timing(f"download only, {url}", {"download": download_seconds})
     except Exception as exc:
         await status.edit_text(
             f"❌ Something went wrong: {exc}\n\n"

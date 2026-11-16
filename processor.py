@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -781,23 +782,43 @@ def image_text(image: Path, workdir: Path) -> str:
         return ocr_lines([png])
 
 
+TIMING_LABELS = {"download": "download", "whisper": "listen", "ocr": "read screen", "ai": "AI"}
+
+
+def timing_text(timings: dict) -> str:
+    """'87s (download 4 · listen 21 · read screen 48 · AI 14)' — where the time went."""
+    parts = [f"{label} {timings[key]:.0f}" for key, label in TIMING_LABELS.items()
+             if key in timings]
+    return f"{sum(timings.values()):.0f}s" + (f" ({' · '.join(parts)})" if parts else "")
+
+
+def log_timing(what: str, timings: dict) -> None:
+    """One line in bot.log per note, so slow steps are easy to see."""
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] timing: {timing_text(timings)} | {what}")
+
+
 def process_videos(videos: list[Path], source: str = "", caption: str = "",
                    creator: dict | None = None) -> tuple[Path, dict]:
     """Full pipeline for one reel or a multi-slide post (videos and/or photos) → ONE note."""
     labels, transcripts, screens, languages = [], [], [], []
     photo_count = 0
+    timings = {"whisper": 0.0, "ocr": 0.0, "ai": 0.0}     # seconds per step
     with tempfile.TemporaryDirectory() as tmp:
         for i, slide in enumerate(videos[:MAX_VIDEOS], start=1):
             workdir = Path(tmp) / f"s{i}"
             workdir.mkdir()
             is_photo = slide.suffix.lower() in IMAGE_EXTS
             try:
+                started = time.perf_counter()
                 if is_photo:
                     text, lang = "", "en"
                     screen = image_text(slide, workdir)
                 else:
                     text, lang = transcribe(slide)
+                    timings["whisper"] += time.perf_counter() - started
+                    started = time.perf_counter()
                     screen = screen_text(slide, workdir)
+                timings["ocr"] += time.perf_counter() - started
             except Exception as exc:   # one broken slide shouldn't stop the whole post
                 print(f"Skipping slide {i} ({slide.name}): {exc!r}")
                 continue
@@ -818,7 +839,12 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "",
         screen = "\n\n".join(f"[{lab}]\n{s[:per_slide]}" for lab, s in zip(labels, screens))
     language = next((lang for lang in languages if lang != "en"), "en")
 
+    started = time.perf_counter()
     data = summarise(transcript, screen, caption)
+    timings["ai"] = time.perf_counter() - started
+    data["timings"] = timings
+    log_timing(f"{len(transcripts)} slide(s), {len(transcript)} chars spoken, "
+               f"{len(screen)} chars on screen", timings)
     data["language"] = language
     data["video_count"] = len(transcripts) - photo_count
     data["photo_count"] = photo_count
