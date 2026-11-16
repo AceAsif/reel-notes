@@ -1,4 +1,4 @@
-do - Show open action items
+todo - Show open action items
 nudge - One action to do now
 done - Tick off actions, e.g. /done 2
 skip - Drop actions, e.g. /skip 3
