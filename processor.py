@@ -151,32 +151,37 @@ def strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
 
 
-def ask_ollama_json(prompt: str) -> dict:
-    """Send a prompt to the local Ollama model and get a JSON object back."""
+def ask_ollama_json(prompt: str, schema: dict | None = None, tries: int = 2) -> dict:
+    """Send a prompt to the local Ollama model and get a JSON object back.
+    `schema` (a JSON schema) makes Ollama force the right shape. An empty or broken
+    answer is tried again; if it is still empty, {} is returned."""
     # ~3.5 characters per token. Long multi-video posts need a bigger context window
     # (uses more graphics-card memory, so only when needed).
     num_ctx = 8192 if len(prompt) < 20000 else 16384
-    resp = requests.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            **ollama_extra(),
-            "options": {
-                "temperature": 0.2,  # low = consistent notes for the same reel
-                "num_ctx": num_ctx,  # room for long transcripts + on-screen text
+    for _ in range(tries):
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "format": schema or "json",
+                **ollama_extra(),
+                "options": {
+                    "temperature": 0.2,  # low = consistent notes for the same reel
+                    "num_ctx": num_ctx,  # room for long transcripts + on-screen text
+                },
             },
-        },
-        timeout=600,
-    )
-    resp.raise_for_status()
-    try:
-        data = json.loads(strip_thinking(resp.json()["response"]))
-    except (json.JSONDecodeError, KeyError):
-        data = {}
-    return data if isinstance(data, dict) else {}
+            timeout=600,
+        )
+        resp.raise_for_status()
+        try:
+            data = json.loads(strip_thinking(resp.json()["response"]))
+        except (json.JSONDecodeError, KeyError):
+            data = {}
+        if isinstance(data, dict) and data:
+            return data
+    return {}
 
 
 # ---- Priorities and claim check -------------------------------------------
@@ -297,6 +302,64 @@ def clean_tags(tags) -> list[str]:
     return result[:6]
 
 
+NOTE_CATEGORIES = ("motivation", "tech", "programming", "other")
+
+
+def text_of(value) -> str:
+    """Any AI value → clean one-line-ish text ('' for None, first text inside a dict)."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return next((v.strip() for v in value.values() if isinstance(v, str) and v.strip()), "")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return ""
+
+
+def text_list(value) -> list[str]:
+    """Any AI value → list of non-empty strings. A plain string is split by line
+    (never one bullet per letter); None or a number gives []."""
+    if isinstance(value, str):
+        value = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", ln) for ln in value.splitlines()]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [s for s in (text_of(v) for v in value) if s]
+
+
+def clean_note_fields(data: dict) -> dict:
+    """Make the shape of the AI answer safe, so one wrong type can't crash the note
+    after the long wait. Changes `data` and returns it."""
+    data["title"] = text_of(data.get("title")) or "Untitled reel"
+    category = text_of(data.get("category")).lower()
+    data["category"] = category if category in NOTE_CATEGORIES else "other"
+    data["summary"] = text_of(data.get("summary"))
+    data["key_points"] = text_list(data.get("key_points"))
+    resources = data.get("resources")
+    data["resources"] = ([r for r in resources if isinstance(r, (dict, str)) and r]
+                         if isinstance(resources, list) else [])
+    return data
+
+
+def _obj(props: dict, required: list[str] | None = None) -> dict:
+    return {"type": "object", "properties": props, "required": required or list(props)}
+
+
+_STR = {"type": "string"}
+NOTE_SCHEMA = _obj({
+    "title": _STR,
+    "category": {"type": "string", "enum": list(NOTE_CATEGORIES)},
+    "tags": {"type": "array", "items": _STR},
+    "summary": _STR,
+    "key_points": {"type": "array", "items": _STR},
+    "resources": {"type": "array", "items": _obj({"name": _STR, "link": _STR})},
+    "action_items": {"type": "array", "items": _obj({
+        "text": _STR, "priority": {"type": "string", "enum": ["high", "normal", "low"]}})},
+    "claims": {"type": "array", "items": _obj({"claim": _STR, "why": _STR})},
+    "quote": _STR, "lesson": _STR, "habit": _STR,
+}, required=["title", "category", "tags", "summary", "key_points", "resources",
+             "action_items", "claims"])
+
+
 def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     """Ask the local Ollama model for a structured note."""
     existing = [t for t, _ in all_tags()][:30]
@@ -307,13 +370,10 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
                     .replace("<<CAPTION>>", caption or "(no caption)")
                     .replace("<<EXISTING_TAGS>>", tag_hint))
     screen = screen + "\n" + caption  # links in the caption count as "shown in the post"
-    data = ask_ollama_json(prompt)
-    # Fill in anything the model left out so the note always renders
-    data.setdefault("title", "Untitled reel")
-    data.setdefault("category", "other")
-    data.setdefault("summary", "")
-    data.setdefault("key_points", [])
-    data.setdefault("resources", [])
+    data = ask_ollama_json(prompt, schema=NOTE_SCHEMA)
+    if not data:
+        raise RuntimeError("The AI gave no usable answer. Send the link again or try /redo.")
+    clean_note_fields(data)       # wrong types can't crash the note any more
     data["action_items"] = clean_actions(data.get("action_items", []))
     data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)

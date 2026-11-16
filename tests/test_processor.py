@@ -193,7 +193,7 @@ def test_mixed_post_note(notes, monkeypatch, tmp_path):
     monkeypatch.setattr(p, "screen_text", lambda v, w: "video text")
     monkeypatch.setattr(p, "image_text", lambda i, w: "photo text")
     seen = {}
-    def fake_ai(prompt):
+    def fake_ai(prompt, schema=None):
         seen["prompt"] = prompt
         return {"title": "Mixed", "category": "tech", "summary": "s", "key_points": [],
                 "resources": [], "action_items": ["a"], "tags": []}
@@ -242,7 +242,7 @@ def test_ask_uses_matching_notes_and_sources(notes, monkeypatch):
     a = make_note(title="Claude Memory Plugin", source="https://x/a")
     make_note(title="Strix Security", source="https://x/b")
     seen = {}
-    def fake_ai(prompt):
+    def fake_ai(prompt, schema=None):
         seen["prompt"] = prompt
         return {"answer": "Use Claude mem.", "sources": [1, 99]}   # 99 is invalid
     monkeypatch.setattr(p, "ask_ollama_json", fake_ai)
@@ -684,3 +684,58 @@ def test_combined_plan(tmp_path):
     assert "V2 creator: the creator (offered: Comment 'Roadmap' for the link)" in plan
     assert "- Comment 'Roadmap'" not in plan                            # not an action
     assert "V1: https://x.com/a · V2: https://x.com/b" in plan
+
+
+@pytest.mark.parametrize("bad,expect", [
+    ({"title": None, "summary": None, "key_points": None}, ("Untitled reel", "", [])),
+    ({"title": "T", "key_points": "one\n- two\n3. three"}, ("T", "", ["one", "two", "three"])),
+    ({"title": "T", "key_points": [{"point": "A"}, {"text": " B "}, None, ""]}, ("T", "", ["A", "B"])),
+    ({"title": 42, "summary": ["x"], "key_points": 5}, ("42", "", [])),
+])
+def test_clean_note_fields_survives_wrong_shapes(bad, expect):
+    d = p.clean_note_fields(dict(bad))
+    assert (d["title"], d["summary"], d["key_points"]) == expect
+    assert d["resources"] == []
+
+
+def test_clean_note_fields_category_and_resources():
+    assert p.clean_note_fields({"category": "Tech"})["category"] == "tech"
+    assert p.clean_note_fields({"category": "science"})["category"] == "other"
+    assert p.clean_note_fields({"category": None})["category"] == "other"
+    d = p.clean_note_fields({"resources": [{"name": "A", "link": ""}, "B", None, 3]})
+    assert d["resources"] == [{"name": "A", "link": ""}, "B"]
+    assert p.clean_note_fields({"resources": "x"})["resources"] == []
+
+
+def _fake_ollama(monkeypatch, answers):
+    calls = []
+    def post(url, json=None, timeout=None):
+        calls.append(json)
+        body = answers[min(len(calls), len(answers)) - 1]
+        return types.SimpleNamespace(raise_for_status=lambda: None,
+                                     json=lambda: {"response": body})
+    monkeypatch.setattr(p.requests, "post", post)
+    return calls
+
+
+def test_ollama_retries_once_on_empty_answer(monkeypatch):
+    calls = _fake_ollama(monkeypatch, ["not json", '{"title": "ok"}'])
+    assert p.ask_ollama_json("x", schema={"type": "object"}) == {"title": "ok"}
+    assert len(calls) == 2 and calls[0]["format"] == {"type": "object"}
+
+
+def test_summarise_raises_clear_error_when_ai_is_empty(monkeypatch):
+    calls = _fake_ollama(monkeypatch, ["", "{}"])
+    monkeypatch.setattr(p, "NOTES_DIR", Path("/nonexistent-notes"))
+    with pytest.raises(RuntimeError, match="no usable answer"):
+        p.summarise("hello", "", "")
+    assert len(calls) == 2
+
+
+def test_summarise_saves_note_when_model_returns_nulls(monkeypatch, tmp_path):
+    _fake_ollama(monkeypatch, ['{"title": null, "key_points": null, "summary": null, '
+                               '"category": "Tech", "resources": null}'])
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    data = p.summarise("hello", "", "")
+    path = p.save_note(data, "hello", "", "https://x.com/a")
+    assert "# Untitled reel" in path.read_text(encoding="utf-8")
