@@ -119,7 +119,7 @@ Ideas **4, 10, 11 and 13** use the notes you already have (about 50), not only n
 - **What it does:** `/note 3` shows a **➕ To-do** button for each line under "Other
   ideas". One tap moves it into "Action items".
 - **Why it helps:** Since batch 3, extra actions are plain bullets. You only use Telegram,
-  so today you cannot bring one back without editing the file. See the risk in section 6.
+  so today you cannot bring one back without editing the file. See the risk in section 5.
 - **Files:** `bot.py` (`note`, one button handler), `processor.py` (move one line), tests.
 
 ### 6. Pick 3 for this week 🟡 new
@@ -218,7 +218,7 @@ Ideas **4, 10, 11 and 13** use the notes you already have (about 50), not only n
 
 - **What it does:** The bot counts each command in a private file for 2 weeks. `/usage`
   shows the counts.
-- **Why it helps:** Section 5 below is my guess. With counts you can remove commands by
+- **Why it helps:** Section 4 below is my guess. With counts you can remove commands by
   fact. The file must go in `.gitignore`.
 - **Files:** `bot.py`, `.gitignore`, tests.
 
