@@ -546,6 +546,7 @@ def test_todo_shows_type_icons_and_filters_by_type(tmp_path, monkeypatch):
 def cleanup_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
     monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    monkeypatch.setattr(bot.processor, "CLEANUP_UNDO_FILE", tmp_path / "undo.json")
     (tmp_path / "2026-11-01_1000_old.md").write_text(
         "# Old\n\n- Date: 2026-11-01 10:00\n- Category: tech\n\n## Action items\n"
         "- [ ] 🔥 Keep me\n- [ ] Extra one\n- [ ] Comment 'FABLE' to get the link\n\n"
@@ -598,3 +599,18 @@ def test_weekly_review_hint_only_when_the_list_is_long(tmp_path, monkeypatch):
     assert bot.cleanup_hint() == ""                              # only 3 open
     monkeypatch.setattr(bot, "CLEANUP_HINT_OVER", 2)
     assert "/cleanup" in bot.cleanup_hint() and "skip 2" in bot.cleanup_hint()
+
+
+def test_undocleanup_command(tmp_path, monkeypatch):
+    cleanup_setup(tmp_path, monkeypatch)
+    sent = []
+    class Msg:
+        async def reply_text(self, t, reply_markup=None): sent.append(t)
+    upd = types.SimpleNamespace(message=Msg(), effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.undo_cleanup_cmd(upd, None))
+    assert "Nothing to undo" in sent[0]
+    replies, _ = press_cleanup("cleanup:yes")
+    assert "/undocleanup" in replies[0] and len(bot.processor.open_actions()) == 1
+    asyncio.run(bot.undo_cleanup_cmd(upd, None))
+    assert "Put back 2 of 2" in sent[1] and len(bot.processor.open_actions()) == 3
+    assert first_matching_handler("/undocleanup") is not None

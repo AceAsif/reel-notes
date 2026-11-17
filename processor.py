@@ -287,9 +287,14 @@ def limit_actions(actions: list[dict]) -> list[dict]:
 LOW_PRIORITY_RE = re.compile(
     # "comment 'MEMORY'" / "comment CLAUDE" / "comment below" (not "add a comment to your code")
     r"\bcomment\s+(?:[\"'“”‘’][\w-]+[\"'“”‘’]|(?-i:[A-Z][A-Z0-9]+)\b|below\b)"
-    r"|\b(?:bio|dm|dms|follow (?:the |this )?(?:creator|author|account|page)|follow (?:me|for more)|"
+    # "link in bio", "DM me", "follow the creator"... but NOT "update your LinkedIn bio",
+    # "DM your manager" or "put the link in your notes app" (those are real actions)
+    r"|\b(?:link in (?:the |my |his |her )?(?:bio|caption|description|comments?|profile)|"
+    r"link (?:below|above)|(?:in|from|check|see) (?:the |my |his |her )bio|"
+    r"dms? (?:me|us)\b|dm (?:for|to get)|send (?:me|us) a dm|dm you|"
+    r"follow (?:the |this )?(?:creator|author|account|page)|follow (?:me|for more)|"
     r"broadcast channel|telegram channel|(?:creator|author)'?s? (?:channel|page|profile)|"
-    r"link in|in the caption|in my (?:profile|page))\b",
+    r"in the caption|in my (?:profile|page))\b",
     re.I)
 
 
@@ -1426,6 +1431,61 @@ def skip_actions_by_id(ids: list[str]) -> list[str]:
     wanted = set(ids)
     numbers = [n for n, a in enumerate(open_actions(), start=1) if action_id(a) in wanted]
     return complete_actions(numbers, "-") if numbers else []
+
+
+# ---- undo for /cleanup ---------------------------------------------------------------
+
+CLEANUP_UNDO_FILE = Path(os.getenv("CLEANUP_UNDO_FILE", "cleanup_undo.json"))
+STAMP_RE = re.compile(r" ❌ \d{4}-\d{2}-\d{2}$")
+
+
+def skip_with_undo(ids: list[str]) -> list[str]:
+    """Skip these actions like skip_actions_by_id, and remember their exact lines,
+    so undo_cleanup() can put them back. Only the LAST clean-up can be undone."""
+    wanted = set(ids)
+    saved = []
+    for a in open_actions():
+        if action_id(a) in wanted:
+            line = a["path"].read_text(encoding="utf-8").splitlines()[a["line"]]
+            saved.append({"path": a["path"].name, "line": line})
+    skipped = skip_actions_by_id(ids)
+    if skipped:
+        CLEANUP_UNDO_FILE.write_text(json.dumps({"when": datetime.now().isoformat(timespec="seconds"),
+                                                 "items": saved}, ensure_ascii=False, indent=1),
+                                     encoding="utf-8")
+    return skipped
+
+
+def can_undo_cleanup() -> int:
+    """How many actions the last /cleanup could put back (0 = nothing to undo)."""
+    try:
+        return len(json.loads(CLEANUP_UNDO_FILE.read_text(encoding="utf-8"))["items"])
+    except (FileNotFoundError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def undo_cleanup() -> int:
+    """Put back the actions skipped by the last /cleanup. Returns how many came back.
+    An action you ticked or changed since then is left alone."""
+    try:
+        items = json.loads(CLEANUP_UNDO_FILE.read_text(encoding="utf-8"))["items"]
+    except (FileNotFoundError, ValueError, KeyError, TypeError):
+        return 0
+    restored = 0
+    for item in items:
+        path = NOTES_DIR / item["path"]
+        if not path.exists():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        skipped_form = "- [-] " + item["line"][6:]
+        for i, line in enumerate(lines):
+            if line.startswith(skipped_form) and STAMP_RE.fullmatch(line[len(skipped_form):]):
+                lines[i] = item["line"]
+                restored += 1
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                break
+    CLEANUP_UNDO_FILE.unlink(missing_ok=True)
+    return restored
 
 
 def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:

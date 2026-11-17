@@ -1,28 +1,15 @@
-# Progress - Batch 3 (action types, one action per reel, clean-up)
-Branch: feature/batch3-action-types
-Last updated: 2026-11-16
+# Progress - Batch 4 (do-features)
+Branch: feature/batch4-do-features
+Last updated: 2026-11-17
 
 ## Done
-- Step 1: Action types 🤖 (AI can do it), 🧠 (habit), 🔗 (look up / set up). The AI picks one;
-  a keyword guess is used when it does not and for older notes. Saved in the note line after
-  the priority icon, e.g. `- [ ] 🔥 🤖 Ask Claude ...`. /todo shows the icon, counts, and
-  filters: /todo ai, /todo habit, /todo lookup.
-- Step 2: "Comment X / DM me / link in bio" are no longer actions. They go to "From the creator".
-  Each reel keeps ONE main action (best priority first). Extra actions become "## Other ideas"
-  (plain bullets, not on /todo).
-- Step 3: Removed the A/B/C pick buttons (and pick_action, skip_note_actions, note_key).
-
-- Step 4: /cleanup (skip junk "comment X" actions + extra actions, keep the best per note, due-dated
-  ones and habits; confirm button). Sunday review hints at it above 30 open actions.
-- Step 5: README, HANDOVER, BotFather command list.
-
-## In progress
-- nothing
+- Step 1: Fixed the creator-offer pattern: "LinkedIn bio", "DM your manager", "link in your notes app"
+  are real actions again. Added /undocleanup (puts back the last /cleanup; file cleanup_undo.json,
+  in .gitignore).
 
 ## Next step
-- Merge the PR, git pull, restart the bot, send /cleanup once, then use the bot for a week.
+- Step 2: Save one, do one. Step 3: nudge with link + key points + Open note. Step 4: Get prompt.
+  Step 5: search fix + usage counter. Step 6: docs, PR.
 
 ## Decisions
-- Old actions without an icon get a guessed type for display only; their note lines are not
-  rewritten until you change their priority or due date.
-- Action ids ignore the type icon, so reminders keep working.
+- /undocleanup only remembers the LAST clean-up. Actions you ticked since then stay as they are.

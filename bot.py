@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /cleanup  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
+        "Actions: /todo  /cleanup  /undocleanup  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
@@ -1256,10 +1256,11 @@ async def cleanup_button_pressed(update: Update, context: ContextTypes.DEFAULT_T
         return
     if query.data == "cleanup:yes":
         # work out the list again now: the first message may be old
-        skipped = processor.skip_actions_by_id(processor.cleanup_plan()["ids"])
+        skipped = processor.skip_with_undo(processor.cleanup_plan()["ids"])
         left = len(processor.open_actions())
         reply = (f"🧹 Skipped {len(skipped)}. {left} open actions left. "
-                 "Send /todo to see them.") if skipped else "Nothing left to clean up."
+                 "Send /todo to see them.\nWrong? Send /undocleanup to put them back."
+                 ) if skipped else "Nothing left to clean up."
     else:
         reply = "OK, nothing changed."
     try:
@@ -1267,6 +1268,23 @@ async def cleanup_button_pressed(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
     await query.message.reply_text(reply)
+
+
+async def undo_cleanup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/undocleanup = put back what the last /cleanup skipped."""
+    if not is_allowed(update):
+        return
+    if not processor.notes_ready():
+        await update.message.reply_text(processor.NOTES_MISSING)
+        return
+    count = processor.can_undo_cleanup()
+    if not count:
+        await update.message.reply_text("Nothing to undo. I only remember the last /cleanup.")
+        return
+    back = processor.undo_cleanup()
+    await update.message.reply_text(
+        f"↩️ Put back {back} of {count} actions. Send /todo to see them."
+        + ("" if back == count else "\n(The others were already ticked or changed.)"))
 
 
 def cleanup_hint() -> str:
@@ -1379,6 +1397,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("cleanup", cleanup))
+    app.add_handler(CommandHandler("undocleanup", undo_cleanup_cmd))
     app.add_handler(CallbackQueryHandler(cleanup_button_pressed, pattern=r"^cleanup:"))
     app.add_handler(CommandHandler("done", done))
     app.add_handler(CommandHandler("skip", skip))

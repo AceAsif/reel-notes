@@ -22,6 +22,7 @@ def notes(tmp_path, monkeypatch):
     folder = tmp_path / "notes"
     folder.mkdir()
     monkeypatch.setattr(p, "NOTES_DIR", folder)
+    monkeypatch.setattr(p, "CLEANUP_UNDO_FILE", tmp_path / "cleanup_undo.json")
     monkeypatch.setattr(p, "enrich_with_github", lambda r, c, t: r)
     return folder
 
@@ -995,3 +996,56 @@ def test_cleanup_with_nothing_to_do(notes):
     make_note(actions=["Do one thing"])
     plan = p.cleanup_plan()
     assert plan["ids"] == [] and plan["open"] == 1
+
+
+# ---- creator offers vs real actions ------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "Comment 'MEMORY' to get the repo", "Comment LEARN to get the prompt",
+    "Follow the creator for more", "Link in bio for the guide", "DM me the word AI",
+    "Check the link in the caption", "Get the link in the bio", "Follow me for more tips",
+    "DM us for the template", "Send me a DM and I'll share it", "Visit the creator's page",
+    "Comment below for the link"])
+def test_creator_offers_are_recognised(text):
+    assert p.LOW_PRIORITY_RE.search(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Update your LinkedIn bio with these 3 keywords", "DM your manager to ask for feedback",
+    "Put the link in your notes app", "Add a comment to your code",
+    "Write your bio in 3 lines", "Reply to the DM from your recruiter"])
+def test_real_actions_are_not_mistaken_for_offers(text):
+    assert not p.LOW_PRIORITY_RE.search(text)
+
+
+def test_a_linkedin_bio_action_is_kept_as_the_main_action():
+    actions = p.clean_actions([{"text": "Update your LinkedIn bio with these 3 keywords",
+                                "priority": "high"}, "Read the guide"])
+    kept, extras, offers = p.split_actions(actions)
+    assert [a["text"] for a in kept] == ["Update your LinkedIn bio with these 3 keywords"]
+    assert offers == []
+
+
+# ---- undo for /cleanup -------------------------------------------------------------------
+
+def test_undo_cleanup_puts_back_the_skipped_actions(notes):
+    path = old_note("One", ["- [ ] 🔥 Best", "- [ ] Second 📅 2030-01-01",
+                            "- [ ] 🔽 Third"])
+    before = path.read_text(encoding="utf-8")
+    old_note("Two", ["- [ ] Keep", "- [ ] Drop"])
+    plan = p.cleanup_plan()
+    assert p.can_undo_cleanup() == 0
+    assert len(p.skip_with_undo(plan["ids"])) == len(plan["ids"]) >= 2
+    assert p.can_undo_cleanup() == len(plan["ids"])
+    assert p.undo_cleanup() == len(plan["ids"])
+    assert path.read_text(encoding="utf-8") == before
+    assert p.can_undo_cleanup() == 0 and p.undo_cleanup() == 0
+
+
+def test_undo_cleanup_leaves_ticked_actions_alone(notes):
+    path = old_note("One", ["- [ ] Best", "- [ ] Extra"])
+    p.skip_with_undo(p.cleanup_plan()["ids"])
+    text = path.read_text(encoding="utf-8").replace("- [-] Extra", "- [x] Extra")
+    path.write_text(text, encoding="utf-8")                   # you ticked it yourself later
+    assert p.undo_cleanup() == 0
+    assert "- [x] Extra" in path.read_text(encoding="utf-8")
