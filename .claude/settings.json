@@ -1,0 +1,97 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./notes/**)",
+      "Read(./cookies.txt)",
+      "Read(./bot.log)",
+      "Read(./reminders.json)",
+      "Read(./sent_jobs.json)",
+      "Read(./bot_state.json)",
+      "Read(./cleanup_undo.json)",
+      "Edit(./.env)",
+      "Edit(./.env.local)",
+      "Edit(./notes/**)",
+      "Edit(./cookies.txt)",
+      "Edit(./bot.log)",
+      "Edit(./reminders.json)",
+      "Edit(./sent_jobs.json)",
+      "Edit(./bot_state.json)",
+      "Edit(./cleanup_undo.json)",
+      "Bash(cat *.env*)",
+      "Bash(cat *cookies.txt*)",
+      "Bash(cat *bot.log*)",
+      "Bash(cat *notes/*)",
+      "Bash(cat *reminders.json*)",
+      "Bash(cat *sent_jobs.json*)",
+      "Bash(cat *bot_state.json*)",
+      "Bash(cat *cleanup_undo.json*)",
+      "Bash(type *.env*)",
+      "Bash(type *cookies.txt*)",
+      "Bash(type *bot.log*)",
+      "Bash(type *notes/*)",
+      "Bash(type *reminders.json*)",
+      "Bash(type *sent_jobs.json*)",
+      "Bash(type *bot_state.json*)",
+      "Bash(type *cleanup_undo.json*)",
+      "Bash(head *.env*)",
+      "Bash(head *cookies.txt*)",
+      "Bash(head *bot.log*)",
+      "Bash(head *notes/*)",
+      "Bash(head *reminders.json*)",
+      "Bash(head *sent_jobs.json*)",
+      "Bash(head *bot_state.json*)",
+      "Bash(head *cleanup_undo.json*)",
+      "Bash(tail *.env*)",
+      "Bash(tail *cookies.txt*)",
+      "Bash(tail *bot.log*)",
+      "Bash(tail *notes/*)",
+      "Bash(tail *reminders.json*)",
+      "Bash(tail *sent_jobs.json*)",
+      "Bash(tail *bot_state.json*)",
+      "Bash(tail *cleanup_undo.json*)",
+      "Bash(grep *.env*)",
+      "Bash(grep *cookies.txt*)",
+      "Bash(grep *bot.log*)",
+      "Bash(grep *notes/*)",
+      "Bash(grep *reminders.json*)",
+      "Bash(grep *sent_jobs.json*)",
+      "Bash(grep *bot_state.json*)",
+      "Bash(grep *cleanup_undo.json*)",
+      "Bash(rg *.env*)",
+      "Bash(rg *cookies.txt*)",
+      "Bash(rg *bot.log*)",
+      "Bash(rg *notes/*)",
+      "Bash(rg *reminders.json*)",
+      "Bash(rg *sent_jobs.json*)",
+      "Bash(rg *bot_state.json*)",
+      "Bash(rg *cleanup_undo.json*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 300,
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 180,
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_commit_check.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
