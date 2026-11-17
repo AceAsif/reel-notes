@@ -59,7 +59,7 @@ Severity: **High** = wrong data or lost work. **Med** = wrong or confusing resul
 | B7 | Med | `processor.py` `tag_untagged_notes` (1008) | A note with an empty `- Tags: ` line gets a **second** Tags line. `read_tags` still reads the first (empty) one, so every `/retag` calls the AI again and adds one more line. | Confirmed | Replace the existing `- Tags:` line when there is one. Insert only when there is none. |
 | B8 | Med | `bot.py` `handle_video` (89) | The whole caption is passed as `source`. The note gets `- Source: <all caption text>`, the duplicate check fails unless the caption is *only* the link, and the caption is not given to the AI as a caption. README says the duplicate check works. | Confirmed | Pass `link.group(0)` (or `""`) as source, and the caption as `caption` (call `process_videos` directly). |
 | B9 | Med | `bot.py` `todo_page`, `notes_list`, `send_nudge`; `processor.py` `open_actions` | If Google Drive is not ready (`NOTES_DIR` missing), the bot says "🎉 No open action items" and "No notes yet". The morning nudge can say this too if the PC just started. | Confirmed | One helper `notes_ready()`. If false, reply "I can't see the notes folder. Is Google Drive running?" |
-| B10 | Med | `tray.py` line 24, `open_notes` | `NOTES = HERE / "notes"` ignores `NOTES_DIR` from `.env`. Your notes are in `G:\My Drive\Reel Notes`, so "Open notes folder" opens (and creates) an empty local folder. | By reading | Call `load_dotenv()` in `tray.py` and use `NOTES_DIR`. |
+| B10 | Med | `tray.py` line 24, `open_notes` | `NOTES = HERE / "notes"` ignores `NOTES_DIR` from `.env`. If your notes are in another folder (for example Google Drive), "Open notes folder" opens (and creates) an empty local folder. | By reading | Call `load_dotenv()` in `tray.py` and use `NOTES_DIR`. |
 | B11 | Med | `processor.py` `download_media` (602), `pick_slides` | `ignoreerrors`, `quiet` and `no_warnings` hide the real yt-dlp error (login needed, private, rate limit). You always get "Nothing could be downloaded... (Videos longer than 10 minutes are skipped)", which is often the wrong reason. | By reading | Give yt-dlp a small `logger` object that keeps the last error line, and show it. |
 | B12 | Med | `processor.py` `process_videos` (735) | Same pattern: a Whisper or OCR error on a single reel becomes "None of the slides could be processed". The real error is only in `bot.log`. | By reading | Keep the last exception and add it to the `RuntimeError` text. |
 | B13 | Med | `processor.py` `download_media` | `noplaylist: False` is needed for carousels, but a YouTube link with `&list=...` downloads **up to 10 videos** of the playlist into one note. | By reading | For YouTube links, pass the clean `watch?v=ID` URL (you already extract the ID in `normalise_url`). |
@@ -70,7 +70,7 @@ Severity: **High** = wrong data or lost work. **Med** = wrong or confusing resul
 | B18 | Med | `bot.py` `redo_button_pressed` (283) | The note is renamed to `.redo` during the work. If the bot is stopped in that minute (tray Quit, PC shutdown), the note stays `.redo` and is invisible to every command. | By reading | On start, rename any `*.redo` back to `.md`. (The rename is not even needed: `note_from_link` has no duplicate check.) |
 | B19 | Med | `processor.py` `action_id` (1167) | Known. Confirmed: one inserted line in a note makes `find_action` return `None`, and `send_reminder` then drops the reminder silently. | Confirmed | Use `md5(file name + action text)` and not the line number. Keep the old format as a fallback for saved reminders. |
 | B20 | Low | `processor.py` `drop_invented_links` (492) | The test is "domain text appears somewhere". `x.com` passes because `netflix.com` contains it. Only the domain is checked, so an invented path on a real domain passes. | Confirmed | Check on a word boundary. For non-GitHub links, require the full `domain/path` to appear when the link has a path. |
-| B21 | Low | `bot.py` `is_allowed` (37) | If `ALLOWED_USER_ID` is empty, **anyone** can use the bot (read notes with `/file`, make your PC download links). The bot name is in the public `HANDOVER.md`. | By reading | When the ID is empty, answer only `/start`. |
+| B21 | Low | `bot.py` `is_allowed` (37) | If `ALLOWED_USER_ID` is empty, **anyone** can use the bot (read notes with `/file`, make your PC download links). | By reading | When the ID is empty, answer only `/start`. |
 | B22 | Low | `processor.py` `parse_when` (1291) | "next friday" gives this Friday. "in 1 month", "noon", "30 minutes" (without "in"), "weekend" are not understood. | Confirmed | Add these few cases with tests. |
 | B23 | Low | `processor.py` write functions (`complete_actions`, `set_due`, `save_reminders`...) | Files are written in place. `tray.py` stops the bot with `terminate()`, which is a hard kill on Windows. A stop in the middle of a write can leave a cut file. Google Drive can also make "(1).md" conflict copies, which then count as extra notes. | By reading | Write to a temp file, then `os.replace`. Skip files that match `* (1).md`. |
 | B24 | Low | `bot.py` `weekly_resurface`, `chat` | Both overwrite `last_results`. `/notes` at 18:59, resurface at 19:00, then `/note 3` fails. | By reading | Keep a separate key for the resurfaced note. |
@@ -146,9 +146,9 @@ temperature 0.2, thinking off (`ask_ollama_json`, `PROMPT`).
     after the other, but Ollama keeps its model loaded for some minutes and `_whisper`
     stays loaded forever. If both sit on the GPU, Ollama may move partly to the CPU and get
     slower. Check with `ollama ps`.
-  - Do not switch to a "turbo" Whisper model if you need Hindi → English. Your code uses
+  - Do not switch to a "turbo" Whisper model if you need non-English → English. Your code uses
     `task="translate"`, and the turbo models are weak at translation.
-  - My honest guess: for 30 to 90 second reels, CPU Whisper on a Ryzen 7 7700 is fine and
+  - My honest guess: for 30 to 90 second reels, CPU Whisper on a modern 8-core CPU is fine and
     the GPU gain is small. Measure before you spend time here.
 - **Better tool names from Whisper.** Whisper often mishears product names. Pass the
   caption start as `initial_prompt=caption[:200]` in `transcribe`. Free and small.
@@ -206,7 +206,7 @@ temperature 0.2, thinking off (`ask_ollama_json`, `PROMPT`).
   yt-dlp is a trusted project, so the risk is low, and the benefit is real. Just know it.
 - `.gitignore` is good. Add `*.redo` and `*.log` to be safe.
 
-### 3.6 UX for a non-native English reader
+### 3.6 UX and simple English
 
 - Note text: ask for simple English in `PROMPT` (see 3.1).
 - New-note reply: put **actions first**, then key points (B26).
@@ -215,7 +215,6 @@ temperature 0.2, thinking off (`ask_ollama_json`, `PROMPT`).
   with one next step.
 - Long work shows one message that never changes. Edit the status at each step:
   "Listening...", "Reading the screen...", "Writing the note...".
-- Optional: one summary line in your first language (see question 1).
 - The command list is long (about 35 commands). Buttons under messages are easier than
   typing numbers (see F1).
 
@@ -333,11 +332,10 @@ project root (`bot.py`, `processor.py`, `tray.py`) and `tests/`.
 
 ## 6. Questions for you
 
-1. What is your first language? Do you want one summary line in it at the top of each note?
-2. About how many notes and how many open actions do you have today? (This decides how
+1. About how many notes and how many open actions do you have today? (This decides how
    strong the clean-up in F4 should be, and whether search needs more than B14.)
-3. How long does a normal 60-second reel take now, and which reels feel slow (long
+2. How long does a normal 60-second reel take now, and which reels feel slow (long
    YouTube, carousels)?
-4. Is the PC usually on at 08:00? If not, F6 (catch-up) moves up to the top 3.
-5. Where do you read and tick notes most: in Telegram, or in the Drive / Markdown app on
+3. Is the PC usually on at 08:00? If not, F6 (catch-up) moves up to the top 3.
+4. Where do you read and tick notes most: in Telegram, or in the Drive / Markdown app on
    the phone? (If you edit files by hand often, B19 and B23 matter more.)

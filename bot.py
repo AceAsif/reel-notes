@@ -31,7 +31,7 @@ import processor  # noqa: E402
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
-TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Australia/Hobart"))
+TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "UTC"))
 YTDLP_UPDATE_TIME = os.getenv("YTDLP_UPDATE_TIME", "03:30").strip().lower()
 MAX_BYTES = 20 * 1024 * 1024  # Telegram bots can only download files up to 20 MB
 
@@ -345,7 +345,7 @@ def health_text() -> str:
     checks = processor.health_checks()
     lines = [f"{'✅' if ok else '❌'} {name}: {detail}" for ok, name, detail in checks]
     bad = sum(not ok for ok, _, _ in checks)
-    head = "🩺 All good, Boss!" if not bad else f"🩺 {bad} problem{'s' if bad > 1 else ''} found:"
+    head = "🩺 All good!" if not bad else f"🩺 {bad} problem{'s' if bad > 1 else ''} found:"
     return head + "\n\n" + "\n".join(lines)
 
 

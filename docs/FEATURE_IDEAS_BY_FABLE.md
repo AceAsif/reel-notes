@@ -264,7 +264,7 @@ you facts. "Hide" means: remove it from the BotFather menu, but keep it working.
 | `/update` | Hide | yt-dlp now updates by itself after the PC starts. |
 | `/stats`, `/month` | Hide | Both already arrive by themselves (Sunday review, monthly summary). |
 | The count lines at the top of `/todo` | Shorten | There are two lines of counts (🔥 ▫️ 🔽 and 🤖 🧠 🔗) plus two lines of help at the bottom. Keep one line each. |
-| Duplicate `plan` line in `Asif-reel-note-bot-commands.txt` | Fix | `plan` is listed twice. Keep one. |
+| Duplicate `plan` line in `botfather-commands.txt` | Fix | `plan` is listed twice. Keep one. |
 
 Keep: `/todo`, `/done`, `/skip`, `/nudge`, `/due`, `/notes`, `/note`, `/search`, `/tag`,
 `/plan`, `/redo`, `/cleanup`, `/health`, chat mode. That is 13 things, down from about 30.

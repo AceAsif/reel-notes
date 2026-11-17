@@ -12,3 +12,5 @@ reminders.json
 sent_jobs.json
 cleanup_undo.json
 bot_state.json
+
+.claude/settings.local.json

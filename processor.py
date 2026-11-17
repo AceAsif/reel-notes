@@ -47,7 +47,7 @@ def get_whisper() -> WhisperModel:
 def transcribe(video: Path) -> tuple[str, str]:
     """Speech to English text. Returns (transcript, detected language code).
 
-    English reels are transcribed as-is. Other languages (Hindi, Bengali, ...)
+    English reels are transcribed as-is. Other languages (Hindi, Spanish, ...)
     are translated to English by Whisper while transcribing.
     """
     if not has_audio(video):
@@ -1875,7 +1875,7 @@ def due_jobs(now: datetime, sent: dict, rules: dict) -> list[tuple[str, str]]:
 CHAT_SYSTEM = """You are Reel Notes, a friendly personal assistant inside Telegram.
 You help me use the notes I saved from short videos (tech, programming, motivation).
 How to talk:
-- Warm, encouraging and simple English (English is not my first language).
+- Warm, encouraging and simple English: short sentences, easy words.
 - Short replies: usually 2-6 sentences, or a short list. No long essays.
 - For facts about tools, commands, links, quotes or tips, use ONLY the notes below.
   Copy names, commands and links exactly. If the notes don't cover it, say
@@ -1999,7 +1999,7 @@ PLAN_CONSTRAINTS = [
     "tell me if something looks outdated, unsafe or like a scam.",
     "- Prefer official sources (GitHub repos, official docs) over the video's claims."]
 PLAN_FOOTER = ["- I use Windows. Give exact commands I can copy.",
-               "- Use simple English (English is not my first language).",
+               "- Use simple English: short sentences, easy words.",
                "- Ask me before installing anything or changing my files or accounts."]
 
 
