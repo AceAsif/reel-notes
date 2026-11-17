@@ -287,9 +287,14 @@ def limit_actions(actions: list[dict]) -> list[dict]:
 LOW_PRIORITY_RE = re.compile(
     # "comment 'MEMORY'" / "comment CLAUDE" / "comment below" (not "add a comment to your code")
     r"\bcomment\s+(?:[\"'“”‘’][\w-]+[\"'“”‘’]|(?-i:[A-Z][A-Z0-9]+)\b|below\b)"
-    r"|\b(?:bio|dm|dms|follow (?:the |this )?(?:creator|author|account|page)|follow (?:me|for more)|"
+    # "link in bio", "DM me", "follow the creator"... but NOT "update your LinkedIn bio",
+    # "DM your manager" or "put the link in your notes app" (those are real actions)
+    r"|\b(?:link in (?:the |my |his |her )?(?:bio|caption|description|comments?|profile)|"
+    r"link (?:below|above)|(?:in|from|check|see) (?:the |my |his |her )bio|"
+    r"dms? (?:me|us)\b|dm (?:for|to get)|send (?:me|us) a dm|dm you|"
+    r"follow (?:the |this )?(?:creator|author|account|page)|follow (?:me|for more)|"
     r"broadcast channel|telegram channel|(?:creator|author)'?s? (?:channel|page|profile)|"
-    r"link in|in the caption|in my (?:profile|page))\b",
+    r"in the caption|in my (?:profile|page))\b",
     re.I)
 
 
@@ -1233,6 +1238,14 @@ SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
                   "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 
+def word_in(word: str, text: str) -> bool:
+    """Is `word` in `text` (both lower case)? One or two letters ("ai", "uv") must be a
+    whole word, or "ai" would match "said" and "again"."""
+    if len(word) <= 2:
+        return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text) is not None
+    return word in text
+
+
 def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[dict]:
     """Find notes containing ALL words in the query (case-insensitive),
     or ANY of them with match_all=False (used by /ask).
@@ -1247,7 +1260,8 @@ def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[di
     for note in NOTES_DIR.glob("*.md"):
         lines = note.read_text(encoding="utf-8").splitlines()
         check = all if match_all else any
-        if not words or not check(w in "\n".join(lines).lower() for w in words):
+        whole = "\n".join(lines).lower()
+        if not words or not check(word_in(w, whole) for w in words):
             continue
         title = lines[0].lstrip("# ").strip() if lines else note.stem
         score, snippet, section = 0, "", "title"
@@ -1256,7 +1270,7 @@ def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[di
                 section = line[3:].strip()
                 continue
             low = line.lower()
-            hits = sum(w in low for w in words)
+            hits = sum(word_in(w, low) for w in words)
             if hits:
                 score += hits * SECTION_WEIGHT.get(section, 1)
                 if not snippet and section != "title":
@@ -1428,6 +1442,137 @@ def skip_actions_by_id(ids: list[str]) -> list[str]:
     return complete_actions(numbers, "-") if numbers else []
 
 
+# ---- small private state (what was shown when, counters) ---------------------------------
+
+STATE_FILE = Path(os.getenv("BOT_STATE_FILE", "bot_state.json"))
+
+
+def count_usage(name: str) -> None:
+    """Count one use of a command ('todo', '(chat)', '(link)') in the private state file."""
+    state = load_state()
+    usage = state.setdefault("usage", {})
+    usage[name] = usage.get(name, 0) + 1
+    state.setdefault("usage_since", date.today().isoformat())
+    save_state(state)
+
+
+def usage_text() -> str:
+    """The counts for /usage, most used first."""
+    state = load_state()
+    usage = state.get("usage", {})
+    if not usage:
+        return "No counts yet. I start counting from now."
+    lines = [f"📊 What you used since {state.get('usage_since', '?')}:"]
+    lines += [f"{n}× {name if name.startswith('(') else '/' + name}"
+              for name, n in sorted(usage.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return "\n".join(lines)
+
+
+def load_state() -> dict:
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_FILE.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+# ---- what you need to do an action: link and key points ----------------------------------
+
+URL_RE = re.compile(r"https?://[^\s)>\]]+")
+
+
+def action_details(action: dict) -> dict:
+    """The main link and two key points of the action's note, for the nudge.
+    {'link': url or '', 'is_reel': True if the link is the saved reel, 'points': [...]}.
+    A real link from Resources is preferred over a Google search link."""
+    s = note_sections(action["path"])
+    urls = [u.rstrip(".,;:!?") for line in s.get("Resources", []) for u in URL_RE.findall(line)]
+    real = [u for u in urls if "/search?" not in u]
+    link, is_reel = (real[0], False) if real else (s.get("source", "").strip(), True)
+    if not link.startswith("http"):
+        link = ""
+    points = [line.lstrip("- ").strip() for line in s.get("Key points", [])]
+    points = [x if len(x) <= 160 else x[:157].rstrip() + "..." for x in points[:2]]
+    return {"link": link, "is_reel": is_reel and bool(link), "points": points}
+
+
+def save_one_candidate(exclude: Path | None = None, today: date | None = None) -> dict | None:
+    """'Save one, do one': when a new reel is saved and you ticked nothing in the last
+    7 days, return ONE older action to ask about (top of /todo, not from the new note).
+    At most once a day. Returns None if it should not ask."""
+    today = today or date.today()
+    state = load_state()
+    if state.get("save_one") == today.isoformat():
+        return None
+    if weekly_stats(today)["done"] > 0:
+        return None
+    action = next((a for a in open_actions() if a["path"] != exclude), None)
+    if action is None:
+        return None
+    state["save_one"] = today.isoformat()
+    save_state(state)
+    return action
+
+
+# ---- undo for /cleanup ---------------------------------------------------------------
+
+CLEANUP_UNDO_FILE = Path(os.getenv("CLEANUP_UNDO_FILE", "cleanup_undo.json"))
+STAMP_RE = re.compile(r" ❌ \d{4}-\d{2}-\d{2}$")
+
+
+def skip_with_undo(ids: list[str]) -> list[str]:
+    """Skip these actions like skip_actions_by_id, and remember their exact lines,
+    so undo_cleanup() can put them back. Only the LAST clean-up can be undone."""
+    wanted = set(ids)
+    saved = []
+    for a in open_actions():
+        if action_id(a) in wanted:
+            line = a["path"].read_text(encoding="utf-8").splitlines()[a["line"]]
+            saved.append({"path": a["path"].name, "line": line})
+    skipped = skip_actions_by_id(ids)
+    if skipped:
+        CLEANUP_UNDO_FILE.write_text(json.dumps({"when": datetime.now().isoformat(timespec="seconds"),
+                                                 "items": saved}, ensure_ascii=False, indent=1),
+                                     encoding="utf-8")
+    return skipped
+
+
+def can_undo_cleanup() -> int:
+    """How many actions the last /cleanup could put back (0 = nothing to undo)."""
+    try:
+        return len(json.loads(CLEANUP_UNDO_FILE.read_text(encoding="utf-8"))["items"])
+    except (FileNotFoundError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def undo_cleanup() -> int:
+    """Put back the actions skipped by the last /cleanup. Returns how many came back.
+    An action you ticked or changed since then is left alone."""
+    try:
+        items = json.loads(CLEANUP_UNDO_FILE.read_text(encoding="utf-8"))["items"]
+    except (FileNotFoundError, ValueError, KeyError, TypeError):
+        return 0
+    restored = 0
+    for item in items:
+        path = NOTES_DIR / item["path"]
+        if not path.exists():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        skipped_form = "- [-] " + item["line"][6:]
+        for i, line in enumerate(lines):
+            if line.startswith(skipped_form) and STAMP_RE.fullmatch(line[len(skipped_form):]):
+                lines[i] = item["line"]
+                restored += 1
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                break
+    CLEANUP_UNDO_FILE.unlink(missing_ok=True)
+    return restored
+
+
 def current_numbers(shown_ids: list[str] | None, numbers: list[int]) -> list[int]:
     """Turn the numbers you SAW in your last /todo into today's /todo positions.
 
@@ -1468,7 +1613,11 @@ STOPWORDS = set("""a an and are as at be but by can could do does for from had h
 i if in into is it its me my of on or should so than that the their them then there these
 they this to was we were what when where which who why will with would you your about any
 all also just like get got some tell show give find need want use using used best good
-which""".split())
+which did save saved say said saw talk talked mention mentioned watch watched notes note
+reel reels video videos""".split())
+
+# Short words that ARE real topics (a plain length rule would drop "ai" and "uv").
+SHORT_TOPIC_WORDS = {"ai", "uv", "ml", "js", "ts", "c#", "ui", "ux", "db", "qa", "vr", "3d"}
 
 ASK_PROMPT = """Answer my question using ONLY the notes below. They are my own notes
 from short videos I saved. Rules:
@@ -1489,7 +1638,8 @@ NOT_FOUND = "I couldn't find that in your notes."
 
 def question_words(question: str) -> list[str]:
     words = re.findall(r"[a-z0-9][a-z0-9+#-]*", question.lower())
-    return [w for w in words if len(w) >= 3 and w not in STOPWORDS]
+    return [w for w in words
+            if (len(w) >= 3 or w in SHORT_TOPIC_WORDS) and w not in STOPWORDS]
 
 
 def relevant_notes(text: str, max_notes: int = 5) -> list[dict]:
@@ -1860,15 +2010,34 @@ def make_plan(path: Path | list[Path], my_goal: str = "") -> str:
     paths = path if isinstance(path, list) else [path]
     if len(paths) > 1:
         return make_combined_plan(paths, my_goal)
-    n = plan_parts(paths[0])
-    out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
-           f"REQUEST: Help me act on what I learned from a short video: \"{n['title']}\"."]
+    return plan_text(plan_parts(paths[0]), my_goal)
+
+
+def make_action_prompt(action: dict, my_goal: str = "") -> str:
+    """A prompt for ONE action (the 🤖 Get prompt button, /prompt 3). Same ART format,
+    built only from the action's note, with the context that note gives."""
+    n = plan_parts(action["path"])
+    return plan_text(n, my_goal, focus=action["action"])
+
+
+def plan_text(n: dict, my_goal: str = "", focus: str = "") -> str:
+    """The ART prompt for one note's parts. `focus` = ONE action to do instead of all."""
+    if focus:
+        out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
+               f"REQUEST: Help me do ONE thing I saved from a short video: \"{focus}\"",
+               f"The video was called \"{n['title']}\"."]
+    else:
+        out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
+               f"REQUEST: Help me act on what I learned from a short video: \"{n['title']}\"."]
     if n["summary"]:
         out.append(f"What it was about: {n['summary']}")
     if my_goal:
         out.append(f"My goal: {my_goal}")
     out += ["", "TERMS", "", "Instructions:"]
-    if n["actions"]:
+    if focus:
+        out += [f"Help me finish this one action: {focus}",
+                "Start with a first step that takes under 5 minutes."]
+    elif n["actions"]:
         out.append("Help me complete these actions, in a sensible order:")
         out += [f"{i}. {a}" for i, a in enumerate(n["actions"], 1)]
     else:

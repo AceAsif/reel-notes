@@ -10,3 +10,5 @@ reminders.json
 *.redo
 *.log
 sent_jobs.json
+cleanup_undo.json
+bot_state.json

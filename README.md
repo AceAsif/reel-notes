@@ -59,7 +59,10 @@ Reel video ───────────────────────
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |
 | `/renametag claudie claude` | Renames a tag in every note (merges it if the new tag is already used) |
-| `/nudge` | One action to do right now, with ✅ Done / ⏭ Skip / 🔁 Another one buttons |
+| `/nudge` | One action to do right now, with the link, two key points and buttons: ✅ Done, ⏭ Skip, 🔁 Another one, 📖 Open note, 🤖 Get prompt (🤖 actions only) |
+| `/prompt 3` | A ready prompt for action 3 of your last `/todo`, to paste into Claude |
+| `/cleanup` | Skip junk and extra old actions (asks first). `/undocleanup` puts the last clean-up back |
+| `/usage` | How often you used each command (only the names are counted) |
 | `/stats` | The last 7 days: reels saved, actions done and skipped, top topics |
 | `/file 1` | Sends note 1 (from your last `/notes`, `/search` or `/tag`) as a `.md` file |
 
@@ -131,6 +134,15 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 - It skips: (1) old "comment X / DM me" actions, and (2) the extra actions in a note that has more than one. It keeps the best action per note, anything with a due date, and every "Habit to try".
 - Skipped actions stay in the note, marked ❌. Nothing is deleted.
 - The Sunday review suggests `/cleanup` when you have more than 30 open actions.
+
+## Help to actually do an action
+
+- **The nudge has what you need:** the action, its main link (a real link first, otherwise the saved reel), two key points, and an **📖 Open note** button.
+- **🤖 Get prompt:** for an action the AI can help with, one tap gives a ready prompt (ART format, built only from the note, no AI call). `/prompt 3` does the same for action 3 of your last `/todo`.
+- **Save one, do one:** when you save a new reel and you have ticked **nothing in the last 7 days**, the bot also shows ONE older action with ✅ Done / ❌ Drop it. It never blocks the new note, and it asks at most once a day.
+- **Undo:** `/undocleanup` puts back the actions the last `/cleanup` skipped (only the last one is remembered).
+- **Usage:** `/usage` shows how many times you used each command, so unused ones can be removed by fact. Only the command name is counted, never your message text. The counts are in `bot_state.json` (not in git).
+- **Search:** "what did I save about AI and uv?" now finds short topic words like AI and uv, and ignores words like "did" and "save".
 
 ## Numbers in /todo
 

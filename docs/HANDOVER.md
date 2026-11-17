@@ -131,6 +131,15 @@ reminders still work (`legacy_action_id`).
 - **Action types:** `🤖 ai`, `🧠 habit`, `🔗 lookup`. The AI sets `type`; `guess_kind` is the
   fallback and is used for older notes. Saved after the priority icon: `- [ ] 🔥 🤖 text`.
   `action_id` ignores the icon. `/todo ai|habit|lookup` filters.
+- **Doing help (batch 4):** `nudge_message` shows `action_details` (link, 2 key points) and
+  buttons 📖 Open note / 🤖 Get prompt (`make_action_prompt` = `plan_text(..., focus=action)`);
+  `/prompt N` uses the saved `/todo` numbers. `save_one_candidate`: after a new note, if nothing
+  was ticked in 7 days, one older action is offered (once a day, state in `bot_state.json`).
+  `LOW_PRIORITY_RE` now needs "link in bio", "DM me" etc. (not "LinkedIn bio", "DM your manager").
+  `/undocleanup` restores the last clean-up (`cleanup_undo.json`). `/usage` counts command
+  names only (`count_use`, group -2 handler). `question_words` keeps short topic words (ai, uv).
+- **Private files (all in .gitignore):** `.env`, `reminders.json`, `sent_jobs.json`,
+  `bot_state.json`, `cleanup_undo.json`. Tests redirect them to a temp folder (`tests/conftest.py`).
 - **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
   actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
   The Sunday review hints at it above 30 open actions.
