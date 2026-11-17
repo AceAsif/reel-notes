@@ -1238,6 +1238,14 @@ SECTION_WEIGHT = {"title": 5, "Key points": 3, "Resources": 3, "Summary": 2,
                   "Action items": 2, "Post caption": 1, "Transcript": 1, "On-screen text": 1}
 
 
+def word_in(word: str, text: str) -> bool:
+    """Is `word` in `text` (both lower case)? One or two letters ("ai", "uv") must be a
+    whole word, or "ai" would match "said" and "again"."""
+    if len(word) <= 2:
+        return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text) is not None
+    return word in text
+
+
 def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[dict]:
     """Find notes containing ALL words in the query (case-insensitive),
     or ANY of them with match_all=False (used by /ask).
@@ -1252,7 +1260,8 @@ def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[di
     for note in NOTES_DIR.glob("*.md"):
         lines = note.read_text(encoding="utf-8").splitlines()
         check = all if match_all else any
-        if not words or not check(w in "\n".join(lines).lower() for w in words):
+        whole = "\n".join(lines).lower()
+        if not words or not check(word_in(w, whole) for w in words):
             continue
         title = lines[0].lstrip("# ").strip() if lines else note.stem
         score, snippet, section = 0, "", "title"
@@ -1261,7 +1270,7 @@ def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[di
                 section = line[3:].strip()
                 continue
             low = line.lower()
-            hits = sum(w in low for w in words)
+            hits = sum(word_in(w, low) for w in words)
             if hits:
                 score += hits * SECTION_WEIGHT.get(section, 1)
                 if not snippet and section != "title":
@@ -1438,6 +1447,27 @@ def skip_actions_by_id(ids: list[str]) -> list[str]:
 STATE_FILE = Path(os.getenv("BOT_STATE_FILE", "bot_state.json"))
 
 
+def count_usage(name: str) -> None:
+    """Count one use of a command ('todo', '(chat)', '(link)') in the private state file."""
+    state = load_state()
+    usage = state.setdefault("usage", {})
+    usage[name] = usage.get(name, 0) + 1
+    state.setdefault("usage_since", date.today().isoformat())
+    save_state(state)
+
+
+def usage_text() -> str:
+    """The counts for /usage, most used first."""
+    state = load_state()
+    usage = state.get("usage", {})
+    if not usage:
+        return "No counts yet. I start counting from now."
+    lines = [f"📊 What you used since {state.get('usage_since', '?')}:"]
+    lines += [f"{n}× {name if name.startswith('(') else '/' + name}"
+              for name, n in sorted(usage.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return "\n".join(lines)
+
+
 def load_state() -> dict:
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -1583,7 +1613,11 @@ STOPWORDS = set("""a an and are as at be but by can could do does for from had h
 i if in into is it its me my of on or should so than that the their them then there these
 they this to was we were what when where which who why will with would you your about any
 all also just like get got some tell show give find need want use using used best good
-which""".split())
+which did save saved say said saw talk talked mention mentioned watch watched notes note
+reel reels video videos""".split())
+
+# Short words that ARE real topics (a plain length rule would drop "ai" and "uv").
+SHORT_TOPIC_WORDS = {"ai", "uv", "ml", "js", "ts", "c#", "ui", "ux", "db", "qa", "vr", "3d"}
 
 ASK_PROMPT = """Answer my question using ONLY the notes below. They are my own notes
 from short videos I saved. Rules:
@@ -1604,7 +1638,8 @@ NOT_FOUND = "I couldn't find that in your notes."
 
 def question_words(question: str) -> list[str]:
     words = re.findall(r"[a-z0-9][a-z0-9+#-]*", question.lower())
-    return [w for w in words if len(w) >= 3 and w not in STOPWORDS]
+    return [w for w in words
+            if (len(w) >= 3 or w in SHORT_TOPIC_WORDS) and w not in STOPWORDS]
 
 
 def relevant_notes(text: str, max_notes: int = 5) -> list[dict]:

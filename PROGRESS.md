@@ -13,8 +13,12 @@ Last updated: 2026-11-17
   Open note button.
 - Step 4: Get prompt: a button for 🤖 actions in the nudge, and /prompt 3.
 
+- Step 5: Search keeps short topic words (ai, uv) and drops filler; /usage counts command names.
+- Step 6: README, HANDOVER, BotFather command list (duplicate `plan` line removed).
+
 ## Next step
-- Step 5: search fix + usage counter. Step 6: docs, PR.
+- Merge the PR, git pull, restart the bot. Add `undocleanup`, `prompt`, `usage` in BotFather.
+- Use the bot for a week; check /usage; then decide which commands to hide.
 
 ## Decisions
 - /undocleanup only remembers the LAST clean-up. Actions you ticked since then stay as they are.

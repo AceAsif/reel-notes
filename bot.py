@@ -1435,6 +1435,30 @@ async def run_due_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
             processor.save_sent_jobs(sent)
 
 
+def usage_name(text: str) -> str:
+    """'/todo high' -> 'todo', a reel link -> '(link)', anything else typed -> '(chat)'."""
+    first = (text or "").strip().split(maxsplit=1)[0] if (text or "").strip() else ""
+    if first.startswith("/"):
+        return first[1:].split("@")[0].lower()
+    return "(link)" if re.search(LINK_PATTERN, text or "") else "(chat)"
+
+
+async def count_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Count what you use, so unused commands can be removed by fact. Only the NAME of
+    the command is counted; the text of your messages is never saved."""
+    try:
+        if is_allowed(update) and update.message and update.message.text:
+            processor.count_usage(usage_name(update.message.text))
+    except Exception as err:                       # counting must never break a command
+        print(f"usage count failed: {err!r}")
+
+
+async def usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/usage = how often you used each command."""
+    if is_allowed(update):
+        await update.message.reply_text(processor.usage_text())
+
+
 async def ignore_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Editing an old message in Telegram must not run its command again."""
     raise ApplicationHandlerStop
@@ -1462,8 +1486,11 @@ def build_app() -> Application:
            .build())
     app.add_error_handler(on_error)
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, ignore_edited), group=-1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.UpdateType.EDITED_MESSAGE, count_use),
+                    group=-2)                   # runs first; never stops the real handler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
+    app.add_handler(CommandHandler("usage", usage))
     app.add_handler(CommandHandler("cleanup", cleanup))
     app.add_handler(CommandHandler("prompt", prompt_cmd))
     app.add_handler(CommandHandler("undocleanup", undo_cleanup_cmd))

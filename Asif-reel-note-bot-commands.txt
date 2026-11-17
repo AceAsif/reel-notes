@@ -20,7 +20,6 @@ remind - Set a reminder, e.g. /remind 3 friday
 reminders - List upcoming reminders
 unremind - Cancel a reminder, e.g. /unremind 1
 newchat - Start a fresh conversation
-plan - Turn a note into a Claude prompt, e.g. /plan 1
 remember - Refresh an older note
 month - This month's learning summary
 redo - Make a note again (newest, or by title)
@@ -29,3 +28,6 @@ update - Update yt-dlp now
 due - Set a due date: /due 3 friday
 plan - Plan for Claude: /plan 2, /plan 1 3, /plan #tag
 cleanup - Skip junk and extra actions (asks first)
+undocleanup - Put back the last clean-up
+prompt - Ready prompt for one action, e.g. /prompt 3
+usage - How often you used each command

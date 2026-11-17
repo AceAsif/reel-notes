@@ -369,12 +369,13 @@ def test_edited_messages_are_ignored():
     msg = Message(1, datetime.now(), Chat(1, "private"), from_user=User(1, "me", False), text="/done 2")
     upd = Update(1, edited_message=msg)
     upd.set_bot(app.bot)
-    first_group = sorted(app.handlers)[0]
-    assert first_group == -1
+    assert sorted(app.handlers)[:2] == [-2, -1]          # -2 counts usage, -1 ignores edits
+    assert not any(h.check_update(upd) for h in app.handlers[-2])     # edits are not counted
     assert any(h.check_update(upd) for h in app.handlers[-1])
     normal = Update(2, message=msg)
     normal.set_bot(app.bot)
     assert not any(h.check_update(normal) for h in app.handlers[-1])
+    assert any(h.check_update(normal) for h in app.handlers[-2])
 
 
 def test_todo_and_notes_when_folder_missing(tmp_path, monkeypatch):
@@ -700,3 +701,23 @@ def test_save_one_do_one_message_after_a_new_note(tmp_path, monkeypatch):
     assert [b.text for b in markup.inline_keyboard[0]] == ["✅ Done", "❌ Drop it", "📖 Open note"]
     asyncio.run(bot.send_note_reply(status, data, path))                   # same day: not again
     assert len(replies) == 1
+
+
+# ---- usage counter ----------------------------------------------------------------------------
+
+def test_usage_name():
+    assert bot.usage_name("/todo high") == "todo"
+    assert bot.usage_name("/Todo@Reel_bot") == "todo"
+    assert bot.usage_name("https://www.instagram.com/reel/abc/") == "(link)"
+    assert bot.usage_name("what did I save about AI?") == "(chat)"
+
+
+def test_count_use_counts_the_name_only(monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(text="/ask my secret question"),
+                                effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.count_use(upd, None))
+    assert bot.processor.load_state()["usage"] == {"ask": 1}
+    assert "secret" not in str(bot.processor.load_state())
+    assert "1× /ask" in bot.processor.usage_text()
+    assert first_matching_handler("/usage") is not None

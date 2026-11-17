@@ -1108,3 +1108,26 @@ def test_make_action_prompt_is_about_one_action_only(notes):
     assert 'Help me do ONE thing I saved from a short video: "Ask Claude to set up memory"' in text
     assert "under 5 minutes" in text and "Memory is stored as Markdown" in text
     assert "Other thing" not in text and "Constraints:" in text and "Output:" in text
+
+
+# ---- search finds short topic words; usage counter -----------------------------------------
+
+def test_question_words_keep_ai_and_uv_and_drop_filler():
+    assert p.question_words("what did I save about AI and uv?") == ["ai", "uv"]
+    assert p.question_words("did I save anything about go to market?") == ["anything", "market"]
+
+
+def test_short_words_match_whole_words_only(notes):
+    make_note(title="Said again", actions=["x"], key_points=["he said it again"], source="https://x/1")
+    make_note(title="Uses AI", actions=["x"], key_points=["the ai tools"], source="https://x/2")
+    assert [r["title"] for r in p.search_notes("ai")] == ["Uses AI"]
+    assert len(p.search_notes("tools")) == 1
+
+
+def test_usage_counter_and_text():
+    assert "No counts yet" in p.usage_text()
+    for name in ["todo", "todo", "(chat)", "ask"]:
+        p.count_usage(name)
+    text = p.usage_text()
+    assert text.splitlines()[1] == "2× /todo" and "1× (chat)" in text and "1× /ask" in text
+    assert "since" in text.splitlines()[0]
