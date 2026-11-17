@@ -28,6 +28,7 @@ from telegram.ext import (  # noqa: E402
 )
 
 import processor  # noqa: E402
+import threads_link  # noqa: E402
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
@@ -107,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
-        "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
+        "Send me a reel, carousel, YouTube Short, TikTok or Threads video link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
@@ -218,7 +219,8 @@ async def process_screenshots(msgs: list) -> None:
 
 
 LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
-                r"youtube\.com/(shorts|watch)|youtu\.be|tiktok\.com)\S*")
+                r"youtube\.com/(shorts|watch)|youtu\.be|tiktok\.com|"
+                r"(?<![\w-])threads\.(?:com|net))\S*")
 
 
 async def already_saved(msg, url: str) -> bool:
@@ -268,6 +270,9 @@ async def note_from_link(status, url: str) -> Path | None:
             if data.get("timings") is not None:      # show the download time too
                 data["timings"] = {"download": download_seconds, **data["timings"]}
                 processor.log_timing(f"download only, {url}", {"download": download_seconds})
+    except threads_link.ThreadsError as exc:    # the message is already short and clear
+        await status.edit_text(str(exc))
+        return None
     except Exception as exc:
         await status.edit_text(
             f"❌ Something went wrong: {exc}\n\n"

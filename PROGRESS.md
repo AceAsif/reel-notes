@@ -1,36 +1,36 @@
-# Progress - Claude Code automations (CLAUDE.md, deny rules, hooks)
-Branch: chore/claude-code-automations
+# Progress - Threads link support
+Branch: feature/threads-links
 Last updated: 2026-11-17
 
 ## Done
-- Step 1: `CLAUDE.md` with the working rules from docs/HANDOVER.md section 12, in simple English.
-- Step 2: `.claude/settings.json` deny rules for .env, notes/, cookies.txt, bot.log, reminders.json,
-  sent_jobs.json, bot_state.json, cleanup_undo.json. Read and Edit rules (18), plus shell rules (48):
-  `cat`, `type`, `head`, `tail`, `grep`, `rg` on those names. Checked in a live session: `cat .env`,
-  `head ./notes/x.md` and `grep ... bot.log` are refused, `cat README.md` still works.
-  `.claude/settings.local.json` is in .gitignore.
-- Step 3: SessionStart hook `.claude/hooks/session_start.py`. Cloud only (CLAUDE_CODE_REMOTE=true).
-  Installs the test packages (not whisper, tesseract, av or pystray: the tests stub them).
-  Skips the install when nothing changed.
-- Step 4: PreToolUse hook `.claude/hooks/pre_commit_check.py` on commit commands. Blocks: trailer lines
-  in the message, private files staged (at any depth, e.g. `backup/.env`, `old/notes/a.md`),
-  force-adding files, Telegram or GitHub tokens in changed files, failing tests.
-- Step 5: 18 tests in `tests/test_hooks.py` (2 are new for nested private files).
-- Step 6: test count in docs/HANDOVER.md fixed (it said 198).
-- Step 7: personal details removed from the repo (names, paths, location, language, hardware).
-  The commands file is now `botfather-commands.txt`. The default time zone is now `UTC`.
-- Tests: 262 passed.
+- Step 1: `LINK_PATTERN` in bot.py accepts `threads.com` and `threads.net` (not `notthreads.com`).
+  The `/start` text mentions Threads.
+- Step 2: new `threads_link.py`. yt-dlp has no Threads support, so the bot reads the public page
+  with ONE request (no login, no cookies, `threads.net` is rewritten to `threads.com` first, so there
+  is no redirect). It looks for the video address in the page data (`video_versions`), then in the
+  `og:video` tag, then in a `<video>` tag. Then it downloads the video file (Meta servers only,
+  https only, max 200 MB) and the normal pipeline makes the note.
+  The post text becomes the caption. The creator comes from the page title.
+- Step 3: messages (short, simple English). No video found: "I could not get this Threads video.
+  Please save the video and send me the file." Text-only and picture-only posts and profile links
+  get their own message. The real reason goes to bot.log (`threads:` lines).
+- Step 4: `processor.download_media` sends Threads links to `threads_link`. `normalise_url` treats
+  threads.com and threads.net links to one post as the same post (duplicate check).
+  `note_from_link` shows the Threads message as it is (no "Something went wrong" and no cookies hint).
+- Step 5: 39 new tests (network always mocked), README, CLAUDE.md code map.
+- Tests: 301 passed.
 
 ## Next step
-- Review and merge the pull request. After merging, new cloud sessions use the hooks.
-- Not tested on Windows. Check once on the PC that `python` finds Python when Claude Code runs a hook.
+- Test with one real Threads video link (see the pull request text). I could not see a live Threads
+  page from here, so the page reader is written from known page formats and tested on mocked pages.
+- If it fails, send the `threads:` lines from bot.log. They say what the page contained.
 
 ## Decisions
-- Hooks are small Python scripts (no bash), so they work on Windows and in the cloud.
-- The deny rules stop Claude's file tools and the six shell readers above. They do not stop every
-  way to read a file (for example a one-line Python command that opens `.env`).
-- The shell rules also block `cat .env.example` (the pattern is `*.env*`). Use the Read tool for that file.
-- The hook looks at the whole command text. A command that only mentions the trailer words or a
-  force-add is blocked too. Use the file tools to write such text into a file.
-- The real notes folder is outside the repo, so these rules do not cover it.
-- No auto-commit, no auto-push, no auto-format.
+- Separate small file `threads_link.py`, so processor.py does not grow.
+- Only the first video of a post is taken. A Threads page also holds replies, and the first video
+  in the page is the main post.
+- The text-only / picture-only message is only used when the page clearly shows it. When the bot is not
+  sure (for example a video it cannot read), it uses the "could not get this video" message.
+- A video address must be https and on a Meta server (cdninstagram.com, fbcdn.net, instagram.com,
+  facebook.com, fbsbx.com, threads.com, threads.net). Other hosts are refused and logged.
+- Not done on purpose (other items): carousels with several videos, picture posts, text posts as notes.

@@ -18,6 +18,7 @@ from urllib.parse import quote_plus
 
 import pytesseract
 import requests
+import threads_link
 from faster_whisper import WhisperModel
 
 NOTES_DIR = Path(os.getenv("NOTES_DIR", "notes"))
@@ -761,6 +762,9 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     Returns (slide files in post order, the post caption, the creator). For a video
     slide you get the video; for a photo slide you get the image.
     """
+    if threads_link.is_threads_url(url):        # yt-dlp has no Threads support
+        return threads_link.download(url, workdir)
+
     import yt_dlp
 
     opts = {
@@ -952,7 +956,10 @@ YOUTUBE_ID_RE = re.compile(
 
 def normalise_url(url: str) -> str:
     """Same reel = same URL, ignoring ?igsh=... tracking bits and trailing slash.
-    YouTube keeps its video ID (watch?v=ID, shorts/ID and youtu.be/ID all match)."""
+    YouTube keeps its video ID (watch?v=ID, shorts/ID and youtu.be/ID all match).
+    Threads: threads.com and threads.net links to one post match."""
+    if threads_link.dedupe_key(url):
+        return threads_link.dedupe_key(url)
     m = YOUTUBE_ID_RE.search(url)
     if m:
         return "youtube:" + m.group(1)           # IDs are case-sensitive: don't lower()
