@@ -6,32 +6,29 @@ suggest improvements. Read it together with `README.md` (user guide) and the cod
 
 ## 1. What it is
 
-A **personal, single-user Telegram bot** (@Asif_reel_notes_bot) that turns short videos
+A **personal, single-user Telegram bot** that turns short videos
 (Instagram, Facebook, YouTube Shorts, TikTok) and screenshots into **Markdown notes**
 with a summary, key points, resources, claims to check and action items. It then helps
-the owner *use* the notes: to-do list, due dates, reminders, a daily nudge, search, chat
+the user *use* the notes: to-do list, due dates, reminders, a daily nudge, search, chat
 over the notes, and ready-made prompts for Claude.
 
-**Why it exists:** the owner saves many tech / programming / motivation reels and never
-acts on them. The goal is not only to store notes but to turn them into actions.
+**Why it exists:** people save many tech / programming / motivation reels and never
+act on them. The goal is not only to store notes but to turn them into actions.
 
 **Hard constraints (do not break these):**
 - 100% **free and local**. No paid APIs. AI runs on local Ollama (`qwen3:8b`).
 - **Private**. Notes live in a Google Drive folder. Never commit `.env`, `notes/`,
   `bot.log`, `cookies.txt`, `reminders.json` or `sent_jobs.json` (all in `.gitignore`).
-- Only the owner can use it (`ALLOWED_USER_ID`).
-- The owner reads simple English (English is not his first language). Bot messages
-  must stay short and simple.
+- Only the allowed user can use it (`ALLOWED_USER_ID`).
+- Bot messages must stay short and in simple English.
 
-## 2. Owner and environment
+## 2. Environment
 
-- Owner: Asif ("Boss"). Works in IT/data; this is a learning + productivity project.
-- Windows PC: Ryzen 7 7700, 32 GB RAM, RTX 5060 Ti 8 GB. Python 3.12 venv.
-- Project folder: `D:\Python projects\reel-notes`.
-- Notes folder: `G:\My Drive\Reel Notes` (Google Drive for desktop), read on the phone.
+- Windows PC with an 8 GB graphics card (models must fit in 8 GB). Python 3.12 venv.
+- Notes folder: a Google Drive folder (Google Drive for desktop), read on the phone.
 - Starts with Windows through a tray icon (`tray.py`). Runs only while the PC is on.
-- Repo: github.com/AceAsif/reel-notes (public, MIT). Workflow: feature branch, then a pull
-  request that the owner squash-merges himself. Plain commit messages.
+- Repo: public, MIT. Workflow: feature branch, then a pull request that the maintainer
+  squash-merges. Plain commit messages.
 
 ## 3. Architecture
 
@@ -158,7 +155,7 @@ reminders still work (`legacy_action_id`).
 - Plain "GitHub" in a learning roadmap is **not** a sign of a repo. Course/doc names
   are never searched on GitHub (they get a Google link).
 - Creator offers ("comment X") are kept in "From the creator", not deleted, so the
-  owner has a way to find the real link when the bot's link is wrong.
+  user has a way to find the real link when the bot's link is wrong.
 - Repo health: archived, no update for over a year, not found, licence shown.
 - Silent videos detected (no hallucinated transcript); Hindi etc. translated to English.
 - 403 rate limits from GitHub are not reported as "repo not found".
@@ -171,12 +168,12 @@ reminders still work (`legacy_action_id`).
 
 ## 9. Known weaknesses and open questions
 
-These are the owner's real pain points and honest gaps. Good places to start.
+These are the real pain points and honest gaps. Good places to start.
 
 1. **Note quality depends on one 8B local model.** It can still mislabel, merge wrong
    details, or miss the main point (a recurring issue with long roadmap-style reels).
    There is no automatic quality check or second pass.
-2. **Whisper runs on CPU** (`device="cpu"`, int8) even though the PC has an RTX 5060 Ti.
+2. **Whisper runs on CPU** (`device="cpu"`, int8) even though the PC has an 8 GB graphics card.
    Transcription is probably the slowest step. GPU use is untested.
 3. **OCR is noisy** (see "On-screen text" in notes). Frame sampling every 2 s is a blunt
    tool; duplicate frames and low-quality text are common.
@@ -221,7 +218,7 @@ mocked. Always run the tests before committing.
 ## 12. Working rules for contributors
 
 - Work on a feature branch, small commits, update `PROGRESS.md`, push. Do not merge to
-  `main`; the owner squash-merges the pull request.
+  `main`; the maintainer squash-merges the pull request.
 - Plain commit messages (no `Co-Authored-By` or session trailer lines).
 - Always say which folder each file goes in and give a suggested commit message.
 - Keep replies simple, short, and in plain English.

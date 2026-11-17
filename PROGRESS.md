@@ -17,10 +17,12 @@ Last updated: 2026-11-17
   force-adding files, Telegram or GitHub tokens in changed files, failing tests.
 - Step 5: 18 tests in `tests/test_hooks.py` (2 are new for nested private files).
 - Step 6: test count in docs/HANDOVER.md fixed (it said 198).
+- Step 7: personal details removed from the repo (names, paths, location, language, hardware).
+  The commands file is now `botfather-commands.txt`. The default time zone is now `UTC`.
 - Tests: 262 passed.
 
 ## Next step
-- Owner: review and merge the pull request. After merging, new cloud sessions use the hooks.
+- Review and merge the pull request. After merging, new cloud sessions use the hooks.
 - Not tested on Windows. Check once on the PC that `python` finds Python when Claude Code runs a hook.
 
 ## Decisions
@@ -30,5 +32,5 @@ Last updated: 2026-11-17
 - The shell rules also block `cat .env.example` (the pattern is `*.env*`). Use the Read tool for that file.
 - The hook looks at the whole command text. A command that only mentions the trailer words or a
   force-add is blocked too. Use the file tools to write such text into a file.
-- The real notes folder (G:\My Drive\Reel Notes) is outside the repo, so these rules do not cover it.
+- The real notes folder is outside the repo, so these rules do not cover it.
 - No auto-commit, no auto-push, no auto-format.

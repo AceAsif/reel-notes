@@ -6,8 +6,8 @@ Copy everything below the line into Claude Code (Fable), started inside the repo
 
 **ACT AS** a senior Python engineer and product thinker who reviews personal-productivity
 tools, specialises in Telegram bots, local LLM pipelines (Ollama), speech-to-text and OCR,
-and knows how to make small tools reliable. You are reviewing the project for its owner,
-who is a data professional, not a full-time developer.
+and knows how to make small tools reliable. You are reviewing the project for its maintainer,
+who is not a full-time developer.
 
 **REQUEST**
 Read `docs/HANDOVER.md` first, then `README.md`, then the code (`bot.py`, `processor.py`,
@@ -20,11 +20,11 @@ Base every point on what you really see in the code, not on guesses.
 *Instructions*
 1. Read the handover document and code before answering. Run `python -m pytest`.
 2. Review these areas: (a) note quality from the local 8B model and how to measure/improve it,
-   (b) speed (Whisper on CPU while the PC has an RTX 5060 Ti; OCR frame sampling),
+   (b) speed (Whisper on CPU while the PC has an 8 GB graphics card; OCR frame sampling),
    (c) reliability (yt-dlp breakage, Telegram timeouts, errors, logging),
    (d) architecture (no database/index, keyword search only, big files, `action_id` by
    line number), (e) security and privacy (token, cookies, prompt injection from video text),
-   (f) UX of commands and messages for a non-native English reader,
+   (f) UX of commands and messages (short, simple English),
    (g) test coverage gaps.
 3. Look for real bugs and edge cases in the code and list them with file and function names.
 4. Suggest new features. For each: the problem it solves, how it works, effort
@@ -36,14 +36,14 @@ Base every point on what you really see in the code, not on guesses.
 *Constraints*
 - Stay **100% free and local**. No paid APIs or subscriptions. If you recommend something
   that costs money, mark it clearly as optional and give a free alternative.
-- Respect my hardware: Ryzen 7 7700, 32 GB RAM, RTX 5060 Ti 8 GB, Windows. Models must
+- Respect the hardware: a Windows PC with 32 GB RAM and an 8 GB graphics card. Models must
   fit in 8 GB VRAM. Prefer Ollama models.
 - Do **not** change code, commit, push or merge. This is a read-only review. If you want
   to try something, do it in a temporary copy and delete it.
 - Never read, print or send my private data: `.env`, `notes/`, `cookies.txt`, tokens.
 - Do not suggest rewriting everything. Prefer small steps that keep the 147 tests passing.
 - Do not pad the answer with generic advice that fits any bot.
-- Use simple English. English is not my first language. Short sentences, no jargon
+- Use simple English: short sentences, easy words, no jargon
   without a one-line explanation.
 
 *Output*

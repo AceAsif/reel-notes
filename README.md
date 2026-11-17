@@ -215,7 +215,7 @@ winget install Ollama.Ollama
 ollama pull qwen3:8b
 
 # 2. Project
-cd "D:\Python projects\reel-notes"
+cd "C:\path\to\reel-notes"
 py -3.12 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -242,9 +242,9 @@ The first time, send `/start` to the bot, put your user ID in `.env` as `ALLOWED
 
 1. Desktop → right-click → **New → Shortcut**, and use this target:
    ```
-   "D:\Python projects\reel-notes\.venv\Scripts\pythonw.exe" "D:\Python projects\reel-notes\tray.py"
+   "C:\path\to\reel-notes\.venv\Scripts\pythonw.exe" "C:\path\to\reel-notes\tray.py"
    ```
-2. Name it `Reel Notes bot`, then in **Properties → Start in**, enter `"D:\Python projects\reel-notes"`.
+2. Name it `Reel Notes bot`, then in **Properties → Start in**, enter `"C:\path\to\reel-notes"`.
 3. Double-click to test. To start it at login, move the shortcut to the Startup folder (`Win+R` → `shell:startup`).
 
 `pythonw.exe` runs Python without a console window. To stop everything, use the tray icon (**Quit**) or `stop_bot.bat`.
@@ -261,7 +261,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `WHISPER_MODEL` | `small` | `medium` is more accurate but slower |
 | `TESSERACT_CMD` | — | Windows: `C:\Program Files\Tesseract-OCR\tesseract.exe` |
 | `NOTES_DIR` | `notes` | Where notes are saved |
-| `TIMEZONE` | `Australia/Hobart` | For the weekly reminder |
+| `TIMEZONE` | `UTC` | Your time zone, e.g. `Europe/London`. Used for the nudge and review times |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
 | `MAX_MINUTES` | `10` | Longest video accepted (for YouTube links) |
 | `RESURFACE` | `on` | Weekly "remember this?" message; `off` to disable |
@@ -298,7 +298,7 @@ When you download a file, Windows attaches a hidden label to it called the **Mar
 Check whether a file has the label:
 
 ```powershell
-Get-Content "D:\Python projects\reel-notes\stop_bot.bat" -Stream Zone.Identifier
+Get-Content "C:\path\to\reel-notes\stop_bot.bat" -Stream Zone.Identifier
 ```
 
 `ZoneId=3` means the file came from the internet, and `HostUrl` shows where it was downloaded from.
@@ -306,7 +306,7 @@ Get-Content "D:\Python projects\reel-notes\stop_bot.bat" -Stream Zone.Identifier
 **Fix for your own, trusted files:** remove the label.
 
 ```powershell
-Unblock-File "D:\Python projects\reel-notes\stop_bot.bat"
+Unblock-File "C:\path\to\reel-notes\stop_bot.bat"
 ```
 
 (This is the same as ticking **Unblock** in the file's Properties.)
