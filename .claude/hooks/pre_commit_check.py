@@ -1,7 +1,7 @@
 """PreToolUse hook: checks before Claude Code runs `git commit`.
 
 It blocks the commit (exit code 2) when:
-  1. the commit command has a `Co-Authored-By` or `Claude-Session` line (owner's rule),
+  1. the commit command has a `Co-Authored-By` or `Claude-Session` line (project rule),
   2. a private file is staged, at any depth (.env, notes/, cookies.txt, bot.log, *.json state files),
   3. new or changed text looks like a Telegram bot token or a GitHub token,
   4. `python -m pytest -q` fails.
@@ -100,7 +100,7 @@ def problems_for(command: str, root: Path = ROOT, run_tests: bool = True) -> lis
     problems = []
     if TRAILER_RE.search(command):
         problems.append("the commit message has a Co-Authored-By or Claude-Session line. "
-                        "Owner's rule: plain commit messages only.")
+                        "Project rule: plain commit messages only.")
     if FORCE_ADD_RE.search(command):
         problems.append("`git add -f` can add files that .gitignore hides. Do not force-add.")
     staged = [n for n in git(root, "diff", "--cached", "--name-only", "-z").split("\0") if n]

@@ -274,7 +274,7 @@ def test_ask_drops_weak_matches(notes, monkeypatch):
 from datetime import datetime as _dt  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
-NOW = _dt(2026, 11, 13, 22, 30, tzinfo=ZoneInfo("Australia/Hobart"))   # Friday night
+NOW = _dt(2026, 11, 13, 22, 30, tzinfo=ZoneInfo("UTC"))   # Friday night
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -325,7 +325,7 @@ class FakeResp:
     def json(self): return {"message": {"content": self.text}}
 
 
-def capture_chat(monkeypatch, reply="Hi **Boss**"):
+def capture_chat(monkeypatch, reply="Hi **there**"):
     sent = {}
     def fake_post(url, json, timeout):
         sent["url"], sent["body"] = url, json
@@ -342,7 +342,7 @@ def test_chat_uses_matching_notes(notes, monkeypatch):
     system = sent["body"]["messages"][0]["content"]
     assert sent["url"].endswith("/api/chat") and sources == [note]
     assert "Claude Memory Plugin" in system and "Cooking Rice" not in system
-    assert reply == "Hi Boss"                       # Markdown ** removed
+    assert reply == "Hi there"                       # Markdown ** removed
 
 
 def test_chat_follow_up_uses_previous_message(notes, monkeypatch):
