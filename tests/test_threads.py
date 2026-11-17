@@ -260,3 +260,59 @@ def test_threads_video_makes_a_note_through_the_normal_pipeline(tmp_path, monkey
     assert asyncio.run(bot.note_from_link(Status(), POST)) == Path("n.md")
     assert seen["source"] == POST and seen["caption"] == "Nice clip, I'm happy"
     assert seen["creator"]["handle"] == "ann"
+
+
+# ---- links the Threads app really gives (found in a real bot.log) ---------------------
+
+SHARE = "https://www.threads.com/share/_aB3xYz12"
+MEDIA = "https://www.threads.com/@ann/post/AbC123/media?xmt=tracking"
+
+
+@pytest.mark.parametrize("url,ok", [
+    (SHARE, True),
+    ("https://www.threads.net/share/_aB3xYz12?x=1", True),
+    ("https://www.threads.com/t/AbC123", True),
+    ("https://www.threads.com/@ann", False),
+    ("https://www.threads.com/share", False),
+    ("https://www.threads.com/", False),
+    (POST, False),
+])
+def test_is_share_link(url, ok):
+    assert t.is_share_link(url) is ok
+
+
+def test_share_link_is_not_called_a_profile(tmp_path, monkeypatch):
+    net = Net(monkeypatch)                    # the page answer ends at the real post address
+    videos, caption, creator = t.download(SHARE, tmp_path)
+    assert videos[0].read_bytes() == b"video-bytes"
+    assert [c[0] for c in net.page_calls] == [SHARE]              # still ONE request to Threads
+    assert creator["handle"] == "ann"
+
+
+def test_share_link_whose_page_has_no_name_takes_it_from_where_it_ended(tmp_path, monkeypatch):
+    Net(monkeypatch, page_resp=Resp(text=page(title="Threads"), url="https://www.threads.com/@bob/post/Zz9"))
+    assert t.download(SHARE, tmp_path)[2]["handle"] == "bob"
+
+
+def test_media_link_asks_for_the_post_page_and_is_the_same_post(tmp_path, monkeypatch):
+    assert t.page_url(MEDIA) == "https://www.threads.com/@ann/post/AbC123"
+    assert t.page_url(MEDIA + "#x") == "https://www.threads.com/@ann/post/AbC123"
+    assert t.dedupe_key(MEDIA) == t.dedupe_key(POST) == "threads:AbC123"
+    net = Net(monkeypatch)
+    t.download(MEDIA, tmp_path)
+    assert [c[0] for c in net.page_calls] == ["https://www.threads.com/@ann/post/AbC123"]
+
+
+def test_an_empty_page_is_described_in_the_log(tmp_path, monkeypatch, capsys):
+    shell = ('<html><head><title>Threads</title><meta property="og:site_name" content="Threads">'
+             "</head><body>Log in to see more</body></html>")
+    Net(monkeypatch, page_resp=Resp(text=shell, url="https://www.threads.com/@ann/post/AbC123",
+                                    headers={"Content-Type": "text/html; charset=utf-8"}))
+    with pytest.raises(t.ThreadsError) as err:
+        t.download(POST, tmp_path)
+    assert str(err.value) == t.MSG_NO_VIDEO                       # the user still sees one sentence
+    log = capsys.readouterr().out
+    for part in ("no video address", "HTTP 200", "title='Threads'", "og:site_name",
+                 "video_versions=0", "login words=1", "text/html"):
+        assert part in log, part
+    assert "Log in to see more" not in log                         # the page text is not copied

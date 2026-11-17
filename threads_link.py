@@ -21,6 +21,8 @@ import requests
 
 THREADS_RE = re.compile(r"^https?://(?:www\.)?threads\.(?:com|net)(?=[/?#]|$)", re.I)
 POST_RE = re.compile(r"/post/([A-Za-z0-9_-]+)")
+POST_PATH_RE = re.compile(r"^(/@[^/]+/post/[A-Za-z0-9_-]+)")     # '/@ann/post/AbC123' (drops '/media')
+SHARE_PATH_RE = re.compile(r"^/(?:share|t)/[A-Za-z0-9_-]+/?$")   # short links from the app's Share button
 PAGE_HOST = "www.threads.com"          # threads.net is the old name: go straight to the new one
 PAGE_TIMEOUT = 15                      # seconds
 VIDEO_TIMEOUT = (10, 60)               # connect, read (seconds)
@@ -69,10 +71,17 @@ def dedupe_key(url: str) -> str:
     return "threads:" + post_code(url) if is_threads_url(url) and post_code(url) else ""
 
 
+def is_share_link(url: str) -> bool:
+    """'https://www.threads.com/share/AbC' (the app's Share button): Threads sends it to the post."""
+    return bool(SHARE_PATH_RE.match(urlsplit((url or "").strip()).path))
+
+
 def page_url(url: str) -> str:
-    """The public page address: new host, no tracking bits (?xmt=...)."""
+    """The public page address: new host, no tracking bits (?xmt=...), and no '/media' at the end
+    ('/@ann/post/AbC123/media' is the picture viewer. The post page is '/@ann/post/AbC123')."""
     path = urlsplit(url.strip()).path.rstrip("/")
-    return f"https://{PAGE_HOST}{path}"
+    m = POST_PATH_RE.match(path)
+    return f"https://{PAGE_HOST}{m.group(1) if m else path}"
 
 
 # ---- reading the page -----------------------------------------------------------
@@ -153,6 +162,19 @@ def parse_page(page: str) -> dict:
 
 # ---- the download -----------------------------------------------------------------
 
+def describe_page(resp, page: str) -> str:
+    """What the answer looked like (no post content). It goes to bot.log, so that a failure
+    shows if this was a login page, an empty page, or a page in a new format."""
+    title = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
+    names = sorted(set(re.findall(r'<meta[^>]+?(?:property|name)=["\']([^"\']+)["\']', page, re.I)))
+    return (f"HTTP {resp.status_code}, ended at {urlsplit(resp.url or '').path or '/'}, "
+            f"{len(page)} bytes, type={(resp.headers.get('Content-Type') or '?')[:30]}, "
+            f"title={(html_lib.unescape(title.group(1)).strip()[:60] if title else None)!r}, "
+            f"meta={[n for n in names if n.startswith(('og:', 'twitter:'))][:10]}, "
+            f"video_versions={page.count('video_versions')}, mp4={page.count('.mp4')}, "
+            f"login words={len(re.findall(r'log ?in', page, re.I))}")
+
+
 def _fail(url: str, detail: str, message: str = MSG_NO_VIDEO) -> None:
     log(url, detail)
     raise ThreadsError(message)
@@ -168,9 +190,9 @@ def _video_host_ok(video_url: str) -> bool:
 def download(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     """Same result as processor.download_media: (video files, caption, creator).
     Raises ThreadsError (with a message for Telegram) when the video cannot be saved."""
-    if not post_code(url):
+    if not post_code(url) and not is_share_link(url):
         _fail(url, "this is a profile link, not a post", MSG_PROFILE)
-    address = page_url(url)
+    address = page_url(url)       # a share link is asked as it is: it is still ONE request
     try:
         resp = requests.get(address, headers=HEADERS, timeout=PAGE_TIMEOUT)   # the ONE page request
     except requests.RequestException as exc:
@@ -186,7 +208,7 @@ def download(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     if info["kind"] == "images":
         _fail(url, "post has pictures only", MSG_IMAGES_ONLY)
     if not info["video_url"]:
-        _fail(url, "no video address in the page (login page, or Threads changed its page?)")
+        _fail(url, "no video address in the page. " + describe_page(resp, resp.text or ""))
     if not _video_host_ok(info["video_url"]):
         _fail(url, f"video address not allowed: host {urlsplit(info['video_url']).hostname!r}")
 
@@ -213,7 +235,8 @@ def download(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     if path.stat().st_size == 0:
         _fail(url, "video download: empty file")
 
-    from_url = re.search(r"/@([A-Za-z0-9._]+)/", urlsplit(url).path + "/")
+    ended = urlsplit(resp.url or "").path + "/"
+    from_url = re.search(r"/@([A-Za-z0-9._]+)/", urlsplit(url).path + "/") or re.search(r"/@([A-Za-z0-9._]+)/", ended)
     handle = info["handle"] or (from_url.group(1) if from_url else "")
     creator = {"name": info["name"], "handle": handle,
                "url": f"https://{PAGE_HOST}/@{handle}" if handle else ""}

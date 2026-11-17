@@ -94,15 +94,15 @@ The bot also sends a **weekly review** of open action items every Sunday at 9:00
 
 ## Threads links
 
-Send a link to a Threads post (`threads.com` or `threads.net`).
+Send a link to a Threads post (`threads.com` or `threads.net`). These work: a normal post link, a link from the app's **Share** button (`threads.com/share/...`), and a link that ends in `/media`.
 
 - yt-dlp does not support Threads, so the bot reads the **public page** once, finds the video address in it, downloads the video and makes the note as usual.
 - No login and no cookies. The bot sends **one request** to the Threads page, then downloads the video file.
 - **Video posts only.** A post with only text or only pictures cannot be saved from a link. The bot says so and suggests a screenshot. Screenshots work: it reads the text with OCR.
 - A link to a profile (not one post) is not accepted.
-- If the video cannot be found, the bot replies: *I could not get this Threads video. Please save the video and send me the file.* Then send the video file to the bot as normal. The real reason is written to `bot.log` (search for `threads:`).
+- If the video cannot be found, the bot replies: *I could not get this Threads video. Please save the video and send me the file.* Then send the video file to the bot as normal. The real reason is written to `bot.log` (search for `threads:`). For a page with no video, the log line says what the page looked like (a login page, an empty page, or a new format), without copying the post.
 - Threads can change its page at any time, so this may stop working one day. Private posts and posts that need a login will not work.
-- The same post on `threads.com` and `threads.net` counts as one note (the duplicate check).
+- The same post on `threads.com` and `threads.net` counts as one note (the duplicate check). A Share-button link is not matched to the post, so the same post can be saved twice if you send it by two different links.
 
 ## Screenshots → notes
 

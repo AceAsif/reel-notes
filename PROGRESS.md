@@ -1,36 +1,33 @@
-# Progress - Threads link support
-Branch: feature/threads-links
-Last updated: 2026-11-17
+# Progress - Threads: share links, /media links, better log
+Branch: fix/threads-share-and-media-links
+Last updated: 2026-11-18
+
+## What went wrong (from a real bot.log)
+- Link 1 was `threads.com/share/...` (the app's Share button). The bot only knew `/post/` links, so it
+  said "This is a profile link" and made NO request. Bug in my code.
+- Link 2 was `.../post/CODE/media?xmt=...`. The bot asked for the `/media` page. Threads answered
+  HTTP 200, but the page had no video address, no text and no meta tags. The reason is not known for
+  sure: the `/media` page may be an empty picture viewer, or Threads may give non-browser clients an
+  empty or login page.
 
 ## Done
-- Step 1: `LINK_PATTERN` in bot.py accepts `threads.com` and `threads.net` (not `notthreads.com`).
-  The `/start` text mentions Threads.
-- Step 2: new `threads_link.py`. yt-dlp has no Threads support, so the bot reads the public page
-  with ONE request (no login, no cookies, `threads.net` is rewritten to `threads.com` first, so there
-  is no redirect). It looks for the video address in the page data (`video_versions`), then in the
-  `og:video` tag, then in a `<video>` tag. Then it downloads the video file (Meta servers only,
-  https only, max 200 MB) and the normal pipeline makes the note.
-  The post text becomes the caption. The creator comes from the page title.
-- Step 3: messages (short, simple English). No video found: "I could not get this Threads video.
-  Please save the video and send me the file." Text-only and picture-only posts and profile links
-  get their own message. The real reason goes to bot.log (`threads:` lines).
-- Step 4: `processor.download_media` sends Threads links to `threads_link`. `normalise_url` treats
-  threads.com and threads.net links to one post as the same post (duplicate check).
-  `note_from_link` shows the Threads message as it is (no "Something went wrong" and no cookies hint).
-- Step 5: 39 new tests (network always mocked), README, CLAUDE.md code map.
-- Tests: 301 passed.
+- Step 1: share links (`/share/CODE`, `/t/CODE`) are accepted. The bot asks for the link as it is (still
+  ONE request) and Threads sends it to the post. The creator name can come from the address it ended at.
+- Step 2: a link that ends in `/media` now asks for the post page (`/@user/post/CODE`). Same post key
+  for the duplicate check.
+- Step 3: when the page has no video, bot.log now says what the page looked like: HTTP status, where it
+  ended, size, title, meta names, counts of `video_versions` and `.mp4`, login words. It does not copy
+  the post text.
+- Step 4: 11 new tests (made-up names, network mocked). Tests: 312 passed.
 
 ## Next step
-- Test with one real Threads video link (see the pull request text). I could not see a live Threads
-  page from here, so the page reader is written from known page formats and tested on mocked pages.
-- If it fails, send the `threads:` lines from bot.log. They say what the page contained.
+- Owner: pull, restart, send the same two links again.
+- If it fails again, send the new `threads:` line. It will show if the page is a login page, an empty
+  page, or a new format.
+- If Threads gives an empty page to non-browser clients, this feature cannot work without a login or
+  extra requests. Both are against the rules for this project. Then the file fallback is the way.
 
 ## Decisions
-- Separate small file `threads_link.py`, so processor.py does not grow.
-- Only the first video of a post is taken. A Threads page also holds replies, and the first video
-  in the page is the main post.
-- The text-only / picture-only message is only used when the page clearly shows it. When the bot is not
-  sure (for example a video it cannot read), it uses the "could not get this video" message.
-- A video address must be https and on a Meta server (cdninstagram.com, fbcdn.net, instagram.com,
-  facebook.com, fbsbx.com, threads.com, threads.net). Other hosts are refused and logged.
-- Not done on purpose (other items): carousels with several videos, picture posts, text posts as notes.
+- No new requests and no login. The same rules as before.
+- The sandbox where this was written cannot reach threads.com (proxy 403), so nothing here is checked
+  against a live page.
