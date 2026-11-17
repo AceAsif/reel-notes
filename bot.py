@@ -81,8 +81,26 @@ def format_reply(data: dict, note_path: Path) -> str:
 
 
 async def send_note_reply(status, data: dict, note_path: Path) -> None:
-    """Show the finished note."""
+    """Show the finished note. If you have ticked nothing for a week, also ask about
+    ONE older action ("save one, do one"). That never blocks or delays the note."""
     await status.edit_text(format_reply(data, note_path))
+    reply = getattr(status, "reply_text", None)
+    if reply is None or not processor.notes_ready():
+        return
+    try:
+        action = processor.save_one_candidate(exclude=note_path)
+        if action:
+            aid = processor.action_id(action)
+            await reply(
+                "💪 Saved! You have not ticked any action for 7 days.\n"
+                f"How about this older one?\n\n{processor.PRIORITY_ICON[action['priority']]}"
+                f"{processor.kind_icon(action['kind'])}{action['action']}\n📌 From: {action['title']}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
+                    InlineKeyboardButton("❌ Drop it", callback_data=f"nudge:skip:{aid}"),
+                    InlineKeyboardButton("📖 Open note", callback_data=f"nudge:note:{aid}")]]))
+    except Exception as err:                         # a side message must never break the note
+        print(f"save-one message failed: {err!r}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -90,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Hi! Your Telegram user ID is {update.effective_user.id}\n"
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short or TikTok link (or a video) and I'll turn it into a note.\n\n"
-        "Actions: /todo  /cleanup  /undocleanup  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
+        "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /health  /update\n\n"
@@ -905,14 +923,58 @@ NUDGE_TIME = os.getenv("NUDGE_TIME", "08:00").strip().lower()   # "off" to disab
 def nudge_message(action: dict, intro: str) -> tuple[str, InlineKeyboardMarkup]:
     icon = processor.PRIORITY_ICON[action["priority"]]
     due = f"\n{processor.due_label(action['due'])}" if action.get("due") else ""
-    text = f"{intro}\n\n{icon}{action['action']}{due}\n\n📌 From: {action['title']}"
+    text = (f"{intro}\n\n{icon}{processor.kind_icon(action['kind'])}{action['action']}{due}"
+            f"\n\n📌 From: {action['title']}")
+    try:
+        details = processor.action_details(action)
+    except OSError:                                  # note moved while we were looking
+        details = {"link": "", "is_reel": False, "points": []}
+    if details["link"]:
+        text += f"\n{'🎬 Reel' if details['is_reel'] else '🔗 Link'}: {details['link']}"
+    if details["points"]:
+        text += "\n\n💡 Remember:\n" + "\n".join(f"• {x}" for x in details["points"])
     aid = processor.action_id(action)
+    extra = [InlineKeyboardButton("📖 Open note", callback_data=f"nudge:note:{aid}")]
+    if action["kind"] == "ai":
+        extra.append(InlineKeyboardButton("🤖 Get prompt", callback_data=f"nudge:prompt:{aid}"))
     buttons = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Done", callback_data=f"nudge:done:{aid}"),
         InlineKeyboardButton("⏭ Skip", callback_data=f"nudge:skip:{aid}"),
         InlineKeyboardButton("🔁 Another one", callback_data=f"nudge:next:{aid}"),
-    ]])
+    ], extra])
     return text, buttons
+
+
+async def send_action_prompt(message, action: dict) -> None:
+    """The ready prompt for ONE action, to copy into Claude (a file if it is too long)."""
+    prompt = processor.make_action_prompt(action)
+    await message.reply_text("🤖 Long-press the next message → Copy, then paste it into Claude 👇")
+    if len(prompt) <= 4000:
+        await message.reply_text(prompt)
+    else:
+        await message.reply_document(
+            document=prompt.encode("utf-8"), filename="prompt.txt",
+            caption="Too long for one message, so here it is as a file. "
+                    "In Claude, tap 📎 and attach this file.")
+
+
+async def prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/prompt 3 = a ready prompt for action 3 of your last /todo."""
+    if not is_allowed(update):
+        return
+    if not processor.notes_ready():
+        await update.message.reply_text(processor.NOTES_MISSING)
+        return
+    numbers = [int(x) for x in re.findall(r"\d+", " ".join(context.args or []))]
+    if not numbers:
+        await update.message.reply_text("Use /todo, then /prompt 3 (the action's number).")
+        return
+    actions = processor.open_actions()
+    now = shown_numbers(context, numbers[:1])
+    if not now or not 1 <= now[0] <= len(actions):
+        await update.message.reply_text("I can't find that action. Send /todo again.")
+        return
+    await send_action_prompt(update.message, actions[now[0] - 1])
 
 
 async def send_nudge(bot, chat_id: int, intro: str) -> None:
@@ -940,7 +1002,7 @@ async def nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def nudge_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Done / Skip / Another one buttons under a nudge."""
+    """Done / Skip / Another one / Open note / Get prompt buttons under a nudge."""
     query = update.callback_query
     await query.answer()
     if not is_allowed(update):
@@ -959,6 +1021,12 @@ async def nudge_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("This action is already done or skipped. Try /nudge")
         return
     number, action = found
+    if what == "note":                       # keep the nudge as it is; show the note below it
+        await query.message.reply_text(processor.note_summary_text(action["path"])[:4000])
+        return
+    if what == "prompt":
+        await send_action_prompt(query.message, action)
+        return
     processor.complete_actions([number], "x" if what == "done" else "-")
     processor.remove_reminder(aid)          # no reminder needed for a finished action
     left = len(processor.open_actions())
@@ -1397,6 +1465,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("todo", todo))
     app.add_handler(CommandHandler("cleanup", cleanup))
+    app.add_handler(CommandHandler("prompt", prompt_cmd))
     app.add_handler(CommandHandler("undocleanup", undo_cleanup_cmd))
     app.add_handler(CallbackQueryHandler(cleanup_button_pressed, pattern=r"^cleanup:"))
     app.add_handler(CommandHandler("done", done))

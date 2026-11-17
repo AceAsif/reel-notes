@@ -23,6 +23,7 @@ def notes(tmp_path, monkeypatch):
     folder.mkdir()
     monkeypatch.setattr(p, "NOTES_DIR", folder)
     monkeypatch.setattr(p, "CLEANUP_UNDO_FILE", tmp_path / "cleanup_undo.json")
+    monkeypatch.setattr(p, "STATE_FILE", tmp_path / "bot_state.json")
     monkeypatch.setattr(p, "enrich_with_github", lambda r, c, t: r)
     return folder
 
@@ -1049,3 +1050,61 @@ def test_undo_cleanup_leaves_ticked_actions_alone(notes):
     path.write_text(text, encoding="utf-8")                   # you ticked it yourself later
     assert p.undo_cleanup() == 0
     assert "- [x] Extra" in path.read_text(encoding="utf-8")
+
+
+# ---- nudge details, "save one, do one", prompt for one action ------------------------------
+
+def test_action_details_prefers_a_real_link_and_two_points(notes):
+    path = make_note(actions=["Install the tool"], key_points=["First point", "Second point", "Third"],
+                     resources=[{"name": "Search", "link": "https://www.google.com/search?q=x"},
+                                {"name": "Repo", "link": "https://github.com/a/b."}])
+    d = p.action_details(p.open_actions()[0])
+    assert d["link"] == "https://github.com/a/b" and d["is_reel"] is False     # no trailing dot
+    assert d["points"] == ["First point", "Second point"]
+
+
+def test_action_details_falls_back_to_the_reel_link(notes):
+    make_note(actions=["Read it"], source="https://www.instagram.com/reel/abc/",
+              resources=[{"name": "Search", "link": "https://www.google.com/search?q=x"}])
+    d = p.action_details(p.open_actions()[0])
+    assert d["link"] == "https://www.instagram.com/reel/abc/" and d["is_reel"] is True
+
+
+def test_action_details_trims_long_points(notes):
+    make_note(actions=["Do it"], key_points=["word " * 60])
+    point = p.action_details(p.open_actions()[0])["points"][0]
+    assert len(point) <= 160 and point.endswith("...")
+
+
+def test_save_one_asks_once_a_day_when_nothing_was_ticked(notes):
+    old = old_note("Older", ["- [ ] 🔥 Old action"])
+    new = make_note(title="Brand new", actions=["New action"], source="https://x/new")
+    today = p.date.today()
+    first = p.save_one_candidate(exclude=new, today=today)
+    assert first["action"] == "Old action" and first["path"] == old
+    assert p.save_one_candidate(exclude=new, today=today) is None            # only once a day
+    assert p.save_one_candidate(exclude=new, today=today + p.timedelta(days=1)) is not None
+
+
+def test_save_one_is_quiet_when_you_did_something_this_week(notes):
+    old_note("Older", ["- [ ] Old action", "- [ ] Tick me"])
+    new = make_note(actions=["New"], source="https://x/new")
+    p.complete_actions([2])                                                  # a real "done" today
+    assert p.save_one_candidate(exclude=new) is None
+
+
+def test_save_one_never_offers_the_new_note_itself(notes):
+    new = make_note(actions=["Only action"], source="https://x/new")
+    assert p.save_one_candidate(exclude=new) is None
+    assert p.load_state() == {}                                              # nothing was recorded
+
+
+def test_make_action_prompt_is_about_one_action_only(notes):
+    path = make_note(title="Memory tools", actions=["Ask Claude to set up memory", "Other thing"],
+                     key_points=["Memory is stored as Markdown"], source="https://x/m")
+    action = next(a for a in p.open_actions() if a["action"] == "Ask Claude to set up memory")
+    text = p.make_action_prompt(action)
+    assert text.startswith("ACT AS:") and "TERMS" in text and "Instructions:" in text
+    assert 'Help me do ONE thing I saved from a short video: "Ask Claude to set up memory"' in text
+    assert "under 5 minutes" in text and "Memory is stored as Markdown" in text
+    assert "Other thing" not in text and "Constraints:" in text and "Output:" in text

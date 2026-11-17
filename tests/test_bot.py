@@ -614,3 +614,89 @@ def test_undocleanup_command(tmp_path, monkeypatch):
     asyncio.run(bot.undo_cleanup_cmd(upd, None))
     assert "Put back 2 of 2" in sent[1] and len(bot.processor.open_actions()) == 3
     assert first_matching_handler("/undocleanup") is not None
+
+
+# ---- nudge with details, Get prompt, save one do one ---------------------------------------
+
+def two_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    base = {"category": "tech", "summary": "About memory", "resources": [], "tags": [], "claims": [],
+            "quote": "", "lesson": "", "habit": ""}
+    bot.processor.save_note({**base, "title": "Memory tools", "key_points": ["Stored as Markdown", "Works offline"],
+                             "resources": [{"name": "Repo", "link": "https://github.com/a/mem"}],
+                             "action_items": [{"text": "Ask Claude to set up memory", "priority": "high",
+                                               "kind": "ai"}]}, "t", "s", "https://x/1")
+    return bot.processor.open_actions()[0]
+
+
+def test_nudge_shows_link_points_and_buttons(tmp_path, monkeypatch):
+    action = two_notes(tmp_path, monkeypatch)
+    text, markup = bot.nudge_message(action, "☀️ Morning")
+    assert "🔥 🤖 Ask Claude to set up memory" in text and "🔗 Link: https://github.com/a/mem" in text
+    assert "• Stored as Markdown" in text and "• Works offline" in text
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert "📖 Open note" in labels and "🤖 Get prompt" in labels
+    assert all(len(b.callback_data.encode()) <= 64 for row in markup.inline_keyboard for b in row)
+
+
+def test_nudge_has_no_prompt_button_for_a_habit(tmp_path, monkeypatch):
+    action = two_notes(tmp_path, monkeypatch)
+    action["kind"] = "habit"
+    labels = [b.text for row in bot.nudge_message(action, "hi")[1].inline_keyboard for b in row]
+    assert "📖 Open note" in labels and "🤖 Get prompt" not in labels
+
+
+def press_nudge(data):
+    sent, edits = [], []
+    async def answer(): pass
+    async def reply_text(t, reply_markup=None): sent.append(t)
+    async def edit_message_text(t, reply_markup=None): edits.append(t)
+    query = types.SimpleNamespace(data=data, answer=answer, edit_message_text=edit_message_text,
+                                  message=types.SimpleNamespace(reply_text=reply_text))
+    upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.nudge_button_pressed(upd, None))
+    return sent, edits
+
+
+def test_open_note_and_get_prompt_buttons_keep_the_nudge(tmp_path, monkeypatch):
+    action = two_notes(tmp_path, monkeypatch)
+    aid = bot.processor.action_id(action)
+    sent, edits = press_nudge(f"nudge:note:{aid}")
+    assert "## Key points" in sent[0] and not edits
+    sent, edits = press_nudge(f"nudge:prompt:{aid}")
+    assert "Copy" in sent[0] and sent[1].startswith("ACT AS:") and "Ask Claude to set up memory" in sent[1]
+    assert not edits and len(bot.processor.open_actions()) == 1          # nothing was ticked
+
+
+def test_prompt_command_uses_the_numbers_you_saw(tmp_path, monkeypatch):
+    two_notes(tmp_path, monkeypatch)
+    sent = []
+    class Msg:
+        async def reply_text(self, t, reply_markup=None): sent.append(t)
+    upd = types.SimpleNamespace(message=Msg(), effective_user=types.SimpleNamespace(id=1))
+    ctx = types.SimpleNamespace(args=["1"], user_data={})
+    asyncio.run(bot.prompt_cmd(upd, ctx))
+    assert sent[1].startswith("ACT AS:")
+    sent.clear()
+    asyncio.run(bot.prompt_cmd(upd, types.SimpleNamespace(args=[], user_data={})))
+    assert "/prompt 3" in sent[0]
+    sent.clear()
+    asyncio.run(bot.prompt_cmd(upd, types.SimpleNamespace(args=["9"], user_data={})))
+    assert "can't find" in sent[0]
+    assert first_matching_handler("/prompt 1") is not None
+
+
+def test_save_one_do_one_message_after_a_new_note(tmp_path, monkeypatch):
+    old = two_notes(tmp_path, monkeypatch)
+    path, data = saved_note(tmp_path, monkeypatch, ["Fresh action"])
+    replies = []
+    async def edit_text(t, **kw): pass
+    async def reply_text(t, reply_markup=None): replies.append((t, reply_markup))
+    status = types.SimpleNamespace(edit_text=edit_text, reply_text=reply_text)
+    asyncio.run(bot.send_note_reply(status, data, path))
+    text, markup = replies[0]
+    assert "not ticked any action for 7 days" in text and "Ask Claude to set up memory" in text
+    assert [b.text for b in markup.inline_keyboard[0]] == ["✅ Done", "❌ Drop it", "📖 Open note"]
+    asyncio.run(bot.send_note_reply(status, data, path))                   # same day: not again
+    assert len(replies) == 1

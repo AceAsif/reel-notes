@@ -1433,6 +1433,61 @@ def skip_actions_by_id(ids: list[str]) -> list[str]:
     return complete_actions(numbers, "-") if numbers else []
 
 
+# ---- small private state (what was shown when, counters) ---------------------------------
+
+STATE_FILE = Path(os.getenv("BOT_STATE_FILE", "bot_state.json"))
+
+
+def load_state() -> dict:
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_FILE.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+# ---- what you need to do an action: link and key points ----------------------------------
+
+URL_RE = re.compile(r"https?://[^\s)>\]]+")
+
+
+def action_details(action: dict) -> dict:
+    """The main link and two key points of the action's note, for the nudge.
+    {'link': url or '', 'is_reel': True if the link is the saved reel, 'points': [...]}.
+    A real link from Resources is preferred over a Google search link."""
+    s = note_sections(action["path"])
+    urls = [u.rstrip(".,;:!?") for line in s.get("Resources", []) for u in URL_RE.findall(line)]
+    real = [u for u in urls if "/search?" not in u]
+    link, is_reel = (real[0], False) if real else (s.get("source", "").strip(), True)
+    if not link.startswith("http"):
+        link = ""
+    points = [line.lstrip("- ").strip() for line in s.get("Key points", [])]
+    points = [x if len(x) <= 160 else x[:157].rstrip() + "..." for x in points[:2]]
+    return {"link": link, "is_reel": is_reel and bool(link), "points": points}
+
+
+def save_one_candidate(exclude: Path | None = None, today: date | None = None) -> dict | None:
+    """'Save one, do one': when a new reel is saved and you ticked nothing in the last
+    7 days, return ONE older action to ask about (top of /todo, not from the new note).
+    At most once a day. Returns None if it should not ask."""
+    today = today or date.today()
+    state = load_state()
+    if state.get("save_one") == today.isoformat():
+        return None
+    if weekly_stats(today)["done"] > 0:
+        return None
+    action = next((a for a in open_actions() if a["path"] != exclude), None)
+    if action is None:
+        return None
+    state["save_one"] = today.isoformat()
+    save_state(state)
+    return action
+
+
 # ---- undo for /cleanup ---------------------------------------------------------------
 
 CLEANUP_UNDO_FILE = Path(os.getenv("CLEANUP_UNDO_FILE", "cleanup_undo.json"))
@@ -1920,15 +1975,34 @@ def make_plan(path: Path | list[Path], my_goal: str = "") -> str:
     paths = path if isinstance(path, list) else [path]
     if len(paths) > 1:
         return make_combined_plan(paths, my_goal)
-    n = plan_parts(paths[0])
-    out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
-           f"REQUEST: Help me act on what I learned from a short video: \"{n['title']}\"."]
+    return plan_text(plan_parts(paths[0]), my_goal)
+
+
+def make_action_prompt(action: dict, my_goal: str = "") -> str:
+    """A prompt for ONE action (the 🤖 Get prompt button, /prompt 3). Same ART format,
+    built only from the action's note, with the context that note gives."""
+    n = plan_parts(action["path"])
+    return plan_text(n, my_goal, focus=action["action"])
+
+
+def plan_text(n: dict, my_goal: str = "", focus: str = "") -> str:
+    """The ART prompt for one note's parts. `focus` = ONE action to do instead of all."""
+    if focus:
+        out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
+               f"REQUEST: Help me do ONE thing I saved from a short video: \"{focus}\"",
+               f"The video was called \"{n['title']}\"."]
+    else:
+        out = [f"ACT AS: {ACT_AS.get(n['category'], 'a helpful expert assistant')}.", "",
+               f"REQUEST: Help me act on what I learned from a short video: \"{n['title']}\"."]
     if n["summary"]:
         out.append(f"What it was about: {n['summary']}")
     if my_goal:
         out.append(f"My goal: {my_goal}")
     out += ["", "TERMS", "", "Instructions:"]
-    if n["actions"]:
+    if focus:
+        out += [f"Help me finish this one action: {focus}",
+                "Start with a first step that takes under 5 minutes."]
+    elif n["actions"]:
         out.append("Help me complete these actions, in a sensible order:")
         out += [f"{i}. {a}" for i, a in enumerate(n["actions"], 1)]
     else:
