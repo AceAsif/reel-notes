@@ -24,6 +24,11 @@ import bot  # noqa: E402
     ("https://www.youtube.com/watch?v=abcDEF12345", True),
     ("https://www.tiktok.com/@user/video/123", True),
     ("https://vm.tiktok.com/ZMabc/", True),
+    ("https://www.threads.com/@ann/post/AbC123", True),
+    ("https://www.threads.net/@ann/post/AbC123?xmt=x", True),
+    ("https://threads.com/@ann/post/AbC123", True),
+    ("look https://www.threads.net/@ann/post/AbC123 nice", True),
+    ("https://notthreads.com/@ann/post/AbC123", False),
     ("https://www.youtube.com/@somechannel", False),
     ("https://example.com/video", False),
 ])
@@ -59,6 +64,7 @@ def first_matching_handler(text):
 
 @pytest.mark.parametrize("text,handler", [
     ("https://www.instagram.com/reel/ABC/", "handle_link"),
+    ("https://www.threads.com/@ann/post/AbC123", "handle_link"),
     ("what did I save about claude?", "chat"),
     ("thanks!", "chat"),
     ("/todo", "todo"),

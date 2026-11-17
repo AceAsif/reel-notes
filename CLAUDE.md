@@ -43,6 +43,7 @@ items, and helps the user DO the actions. Read `docs/HANDOVER.md` first, then `R
 
 - `bot.py` is the Telegram layer: handlers, buttons, scheduled jobs.
 - `processor.py` is all the logic. It has no Telegram code.
+- `threads_link.py` handles Threads links (public page, one request, no login). It has no Telegram code.
 - `tray.py` is the Windows tray icon.
 - The note format is a contract. `open_actions`, `save_note`, `note_sections` and
   `plan_parts` all parse it. Do not change a heading or an action line format without

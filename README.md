@@ -1,6 +1,6 @@
 # Reel Notes 📝
 
-A personal Telegram bot that turns Instagram, Facebook, YouTube Shorts and TikTok videos (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
+A personal Telegram bot that turns Instagram, Facebook, YouTube Shorts, TikTok and Threads videos (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
 
 Send the bot a **reel link** or a **reel video**, and about a minute later you get back:
 
@@ -35,7 +35,7 @@ Reel video ───────────────────────
 
 | Command | What it does |
 |---|---|
-| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes) and TikTok |
+| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok and Threads (video posts only, see below) |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
@@ -91,6 +91,18 @@ If there's no confident match, the note keeps a GitHub search link. This uses th
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
+
+## Threads links
+
+Send a link to a Threads post (`threads.com` or `threads.net`).
+
+- yt-dlp does not support Threads, so the bot reads the **public page** once, finds the video address in it, downloads the video and makes the note as usual.
+- No login and no cookies. The bot sends **one request** to the Threads page, then downloads the video file.
+- **Video posts only.** A post with only text or only pictures cannot be saved from a link. The bot says so and suggests a screenshot. Screenshots work: it reads the text with OCR.
+- A link to a profile (not one post) is not accepted.
+- If the video cannot be found, the bot replies: *I could not get this Threads video. Please save the video and send me the file.* Then send the video file to the bot as normal. The real reason is written to `bot.log` (search for `threads:`).
+- Threads can change its page at any time, so this may stop working one day. Private posts and posts that need a login will not work.
+- The same post on `threads.com` and `threads.net` counts as one note (the duplicate check).
 
 ## Screenshots → notes
 
@@ -274,6 +286,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 - Telegram bots can only download videos up to 20 MB (links have no limit).
 - On-screen text from busy backgrounds or stylised captions can be noisy. The AI usually fixes obvious typos.
 - Instagram may sometimes block downloads without a logged-in cookies file.
+- Threads: video posts only, and only if the public page shows the video without a login.
 - Claims are flagged, not fact-checked: the `⚠️ Claims to check` section tells you what to verify yourself.
 - Carousel posts: up to 10 slides. Photo slides are read with OCR only, so text in a photo is captured but the picture itself isn't described.
 - For personal use only. Downloading reels may go against Meta's terms of service.
