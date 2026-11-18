@@ -1,28 +1,33 @@
-# Progress - X (x.com and twitter.com) video links
-Branch: feature/x-links
+# Progress - One idea, one to-do (habit and action duplicates)
+Branch: fix/habit-action-duplicate
 Last updated: 2026-11-18
 
+## The problem (seen in a real note)
+A motivation reel gave a "Habit to try" AND an action with the same meaning ("Every morning, write
+down one limiting belief..." and "Write down one belief that limits you..."). Both are open to-dos
+(`open_actions` counts both sections), so /todo showed the same idea twice. /plan did too.
+
 ## Done
-- Step 1: `LINK_PATTERN` in bot.py accepts `x.com` and `twitter.com` (also `www.`, `mobile.`, `m.`).
-  It does not accept look-alikes such as `linux.com`, `fixupx.com` or `vxtwitter.com`.
-  The `/start` text mentions X.
-- Step 2: `processor.download_media` sends X links through yt-dlp like the other sites (yt-dlp has an
-  X extractor). For X links the cookies file is NEVER used, and no login option is set.
-- Step 3: if yt-dlp fails for any reason (no video in the post, needs a login, too long, network), the
-  bot replies "I could not get this X video. Please save the video and send me the file." The real
-  yt-dlp error goes to bot.log on a line that starts with `x: yt-dlp failed:` (the address is logged
-  without the ?s=... tracking part). Other sites keep their old error messages.
-- Step 4: `normalise_url`: x.com, twitter.com and mobile links to one post are the same post
-  (duplicate check).
-- Step 5: 34 new tests with a fake yt-dlp (no network). README. Tests: 346 passed.
+- Step 1: `similar_idea(a, b)`: two lines are the same idea when they share at least 3 words and at
+  least 60% of the words of the shorter one. No AI. Words about WHEN ("every", "morning", weekdays,
+  "one") and common filler words are ignored. Light stemming ("limiting", "limits" -> "limit").
+- Step 2: new notes: `merge_habit_and_actions` (called in `summarise`). If the habit repeats an action,
+  the action is dropped and the habit keeps ONE to-do with the action's priority and the 🧠 type,
+  e.g. `- [ ] 🔥 🧠 Every morning, ...`. A repeated "other idea" is dropped too. A different action
+  stays. The Telegram reply shows the habit once.
+- Step 3: old notes: `/cleanup` counts and skips the pair ("dups"). It keeps the action and skips the
+  habit, unless only the habit has a due date. A habit that repeats an action that /cleanup skips as an
+  extra is not skipped (the idea stays once). Uses the normal confirm button and `/undocleanup`.
+- Step 4: `/plan` lists a repeated line once.
+- Step 5: 25 new tests, README. Tests: 371 passed.
 
 ## Next step
-- Test with one public X video link (see the pull request text).
-- If it fails, send the `x: yt-dlp failed:` line from bot.log. Often `/update` (new yt-dlp) fixes it.
+- Owner: pull, restart. Send /cleanup once. The text shows a new line "N are the same idea twice".
+- Check one old motivation note after the clean-up: one of the two lines is marked ❌, the other is open.
 
 ## Decisions
-- The message says "X video", not "Threads video". Same sentence, right name.
-- Any failure for an X link gives that message. A text-only or picture-only post gets it too (yt-dlp
-  cannot tell us more, and the real reason is in bot.log).
-- No browser, no login, no cookies, no extra requests: only yt-dlp.
-- Not done on purpose: look-alike domains (fixupx, vxtwitter), t.co short links, X profile links.
+- Deterministic rule (no AI call): fast, free and testable. Thresholds are in `similar_idea`.
+- New notes keep the HABIT (it has the detail "every morning"); old notes keep the ACTION (it has the
+  priority, type and maybe a due date, and the note is not rewritten).
+- The prompt is not changed: the model's output is checked after the fact, which is more reliable.
+- Not done: merging two different actions that look alike in different notes.
