@@ -29,6 +29,14 @@ import bot  # noqa: E402
     ("https://threads.com/@ann/post/AbC123", True),
     ("look https://www.threads.net/@ann/post/AbC123 nice", True),
     ("https://notthreads.com/@ann/post/AbC123", False),
+    ("https://x.com/ann/status/1234567890", True),
+    ("https://twitter.com/ann/status/1234567890?s=20", True),
+    ("https://mobile.twitter.com/ann/status/1234567890", True),
+    ("https://www.x.com/i/status/1234567890", True),
+    ("look at https://x.com/ann/status/1234567890 wow", True),
+    ("https://linux.com/ann/status/1", False),
+    ("https://fixupx.com/ann/status/1", False),
+    ("https://vxtwitter.com/ann/status/1", False),
     ("https://www.youtube.com/@somechannel", False),
     ("https://example.com/video", False),
 ])
@@ -65,6 +73,7 @@ def first_matching_handler(text):
 @pytest.mark.parametrize("text,handler", [
     ("https://www.instagram.com/reel/ABC/", "handle_link"),
     ("https://www.threads.com/@ann/post/AbC123", "handle_link"),
+    ("https://x.com/ann/status/1234567890", "handle_link"),
     ("what did I save about claude?", "chat"),
     ("thanks!", "chat"),
     ("/todo", "todo"),
