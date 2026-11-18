@@ -756,6 +756,37 @@ def slide_position(p: Path) -> int:
     return int(n) if n.isdigit() else 0
 
 
+# ---- X (x.com and twitter.com) ------------------------------------------------------------
+# yt-dlp reads X videos. No login and no cookies are used for X, so a post that needs a login
+# (age-limited, private) cannot be saved. Then the bot asks for the video file instead.
+
+X_URL_RE = re.compile(r"^https?://(?:www\.|mobile\.|m\.)?(?:x|twitter)\.com/", re.I)
+X_STATUS_RE = re.compile(
+    r"^https?://(?:www\.|mobile\.|m\.)?(?:x|twitter)\.com/[^/?#]+/status(?:es)?/(\d+)", re.I)
+MSG_X_NO_VIDEO = "I could not get this X video. Please save the video and send me the file."
+
+
+class VideoNotSaved(RuntimeError):
+    """The message is ready to show in Telegram. The real reason is in bot.log."""
+
+
+def is_x_url(url: str) -> bool:
+    return bool(X_URL_RE.match((url or "").strip()))
+
+
+class YtdlpErrors:
+    """A yt-dlp logger that only remembers the error lines, so they can go to bot.log."""
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def debug(self, msg) -> None: pass
+    def info(self, msg) -> None: pass
+    def warning(self, msg) -> None: pass
+
+    def error(self, msg) -> None:
+        self.errors.append(str(msg))
+
+
 def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     """Download a reel, or every slide of a carousel post (videos AND photos).
 
@@ -786,19 +817,32 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
         "match_filter": yt_dlp.utils.match_filter_func(
             f"duration <=? {MAX_MINUTES * 60}"),
     }
-    # Instagram often needs you logged in: export cookies to a cookies.txt file
-    if os.getenv("COOKIES_FILE"):
+    x_link = is_x_url(url)
+    seen = YtdlpErrors()
+    if x_link:
+        opts["logger"] = seen           # keep yt-dlp's real error for bot.log
+    # Instagram often needs you logged in: export cookies to a cookies.txt file.
+    # X links never get cookies (no login for X).
+    if os.getenv("COOKIES_FILE") and not x_link:
         opts["cookiefile"] = os.getenv("COOKIES_FILE")
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True) or {}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True) or {}
 
-    caption = info.get("description") or ""
-    if not caption:  # carousels keep the caption on each item
-        for entry in info.get("entries") or []:
-            if entry and entry.get("description"):
-                caption = entry["description"]
-                break
-    return pick_slides(workdir), caption.strip(), creator_from_info(info)
+        caption = info.get("description") or ""
+        if not caption:  # carousels keep the caption on each item
+            for entry in info.get("entries") or []:
+                if entry and entry.get("description"):
+                    caption = entry["description"]
+                    break
+        return pick_slides(workdir), caption.strip(), creator_from_info(info)
+    except Exception as exc:
+        if not x_link:
+            raise
+        reason = " | ".join(seen.errors[-2:]) or repr(exc)       # yt-dlp's own words first
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] x: yt-dlp failed: {reason[:400]} | "
+              f"{url.split('?')[0]}", flush=True)
+        raise VideoNotSaved(MSG_X_NO_VIDEO) from exc
 
 
 def creator_from_info(info: dict) -> dict:
@@ -960,6 +1004,9 @@ def normalise_url(url: str) -> str:
     Threads: threads.com and threads.net links to one post match."""
     if threads_link.dedupe_key(url):
         return threads_link.dedupe_key(url)
+    x = X_STATUS_RE.match(url.strip())
+    if x:
+        return "x:" + x.group(1)                 # x.com, twitter.com and mobile links: same post
     m = YOUTUBE_ID_RE.search(url)
     if m:
         return "youtube:" + m.group(1)           # IDs are case-sensitive: don't lower()

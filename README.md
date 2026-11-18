@@ -1,6 +1,6 @@
 # Reel Notes 📝
 
-A personal Telegram bot that turns Instagram, Facebook, YouTube Shorts, TikTok and Threads videos (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
+A personal Telegram bot that turns Instagram, Facebook, YouTube Shorts, TikTok, Threads and X videos (motivation, tech, programming) into notes with action items, so the useful stuff from reels doesn't get lost.
 
 Send the bot a **reel link** or a **reel video**, and about a minute later you get back:
 
@@ -35,7 +35,7 @@ Reel video ───────────────────────
 
 | Command | What it does |
 |---|---|
-| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok and Threads (video posts only, see below) |
+| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok, Threads and X (video posts only, see below) |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
@@ -91,6 +91,18 @@ If there's no confident match, the note keeps a GitHub search link. This uses th
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
 The bot also sends a **weekly review** of open action items every Sunday at 9:00 am, and it skips reels that already have a note.
+
+## X (Twitter) links
+
+Send a link to a post on `x.com` or `twitter.com` (also `mobile.twitter.com`).
+
+- The bot uses **yt-dlp**, like for the other sites. A post with a video makes a note. A post with several videos makes one combined note.
+- **No login and no cookies.** The bot never sends your cookies file to X. So posts that need a login (age-limited or private posts) cannot be saved.
+- **Video posts only.** A post with only text or pictures cannot be saved from a link.
+- If the video cannot be saved, the bot replies: *I could not get this X video. Please save the video and send me the file.* Then send the video file to the bot as normal. The real reason (yt-dlp's own message) is written to `bot.log`: search for `x: yt-dlp failed`.
+- The same post on `x.com` and `twitter.com` counts as one note (the duplicate check).
+- Links that other sites make for X (for example `fixupx.com` or `vxtwitter.com`) are not accepted. Use the normal `x.com` link.
+- X changes often. If it stops working, update yt-dlp with `/update` and restart the bot.
 
 ## Threads links
 
@@ -287,6 +299,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 - On-screen text from busy backgrounds or stylised captions can be noisy. The AI usually fixes obvious typos.
 - Instagram may sometimes block downloads without a logged-in cookies file.
 - Threads: video posts only, and only if the public page shows the video without a login.
+- X: video posts only, and no login (so no age-limited or private posts).
 - Claims are flagged, not fact-checked: the `⚠️ Claims to check` section tells you what to verify yourself.
 - Carousel posts: up to 10 slides. Photo slides are read with OCR only, so text in a photo is captured but the picture itself isn't described.
 - For personal use only. Downloading reels may go against Meta's terms of service.
