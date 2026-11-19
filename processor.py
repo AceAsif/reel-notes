@@ -448,6 +448,71 @@ NOTE_SCHEMA = _obj({
              "action_items", "claims"])
 
 
+# ---- one idea, one to-do (a habit and an action that say the same thing) -------------------
+
+# Words that tell WHEN something is done. They do not tell WHAT it is, so they are ignored
+# when two lines are compared ("Every morning, write..." and "Write..." are the same idea).
+WHEN_WORDS = {"one", "every", "each", "day", "daily", "morning", "evening", "night", "week",
+              "weekly", "month", "monthly", "time", "times", "today", "tomorrow", "monday",
+              "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+
+
+def _idea_word(word: str) -> str:
+    """'limiting', 'limits' -> 'limit' (very light stemming, good enough to compare)."""
+    for suffix in ("ing", "ed", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)]
+    return word
+
+
+def idea_words(text: str) -> set[str]:
+    skip = STOPWORDS | WHEN_WORDS
+    return {_idea_word(w) for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) >= 3 and w not in skip}
+
+
+def similar_idea(a: str, b: str, min_shared: int = 3, ratio: float = 0.6) -> bool:
+    """True when two to-do lines are the same idea: they share at least `min_shared` words
+    and at least `ratio` of the words of the shorter one. No AI is used."""
+    wa, wb = idea_words(a), idea_words(b)
+    if not wa or not wb:
+        return False
+    shared = len(wa & wb)
+    return shared >= min_shared and shared / min(len(wa), len(wb)) >= ratio
+
+
+def merge_habit_and_actions(data: dict) -> None:
+    """A motivation reel gives a "habit" AND an action that are often the same thing. That
+    would be two entries in /todo for one idea. Keep ONE: the habit (it has the detail,
+    like "Every morning"), with the priority of the action it replaces. Changes `data`."""
+    habit = data.get("habit") or ""
+    if not habit:
+        return
+    kept, merged = [], []
+    for action in data.get("action_items", []):
+        (merged if similar_idea(habit, action["text"]) else kept).append(action)
+    if merged:
+        data["action_items"] = kept
+        data["habit_priority"] = min((a["priority"] for a in merged), key=PRIORITY_RANK.get)
+    data["other_ideas"] = [i for i in data.get("other_ideas", []) if not similar_idea(habit, i)]
+
+
+def habit_prefix(data: dict) -> str:
+    """'🔥 🧠 ' when the habit replaced an action (so /todo shows its priority and type), else ''."""
+    if "habit_priority" not in data:
+        return ""
+    return PRIORITY_ICON[data["habit_priority"]] + kind_icon("habit")
+
+
+def drop_repeats(lines: list[str]) -> list[str]:
+    """The same list without a line that repeats an earlier one (same idea)."""
+    kept: list[str] = []
+    for line in lines:
+        if not any(similar_idea(line, other) for other in kept):
+            kept.append(line)
+    return kept
+
+
 def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     """Ask the local Ollama model for a structured note."""
     existing = [t for t, _ in all_tags()][:30]
@@ -467,6 +532,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     data["other_ideas"] = [a["text"] for a in extras]
     data["claims"] = clean_claims(data.get("claims", []))
     clean_motivation_fields(data, transcript + "\n" + caption)
+    merge_habit_and_actions(data)             # one idea = one to-do
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
     data["resources"] = enrich_with_github(data["resources"], data["category"],
@@ -1046,7 +1112,7 @@ def motivation_lines(data: dict) -> list[str]:
     if data.get("lesson"):
         lines += ["## Main lesson", data["lesson"], ""]
     if data.get("habit"):
-        lines += ["## Habit to try", f"- [ ] {data['habit']}", ""]
+        lines += ["## Habit to try", f"- [ ] {habit_prefix(data)}{data['habit']}", ""]
     return lines
 
 
@@ -1471,7 +1537,10 @@ def cleanup_plan() -> dict:
 
     * junk: "comment X / DM me / link in bio" actions (they are not real actions);
     * extras: in a note with several actions, all but the best one (highest priority,
-      then first). Actions with a due date and "Habit to try" lines are always kept.
+      then first). Actions with a due date are always kept;
+    * dups: a "Habit to try" and an action in the same note that are the same idea. One of
+      the two is skipped: the habit, unless only the habit has a due date.
+      Other "Habit to try" lines are always kept.
     `ids` = the action ids to skip; `left` = how many open actions remain after."""
     actions = open_actions()
     junk = [a for a in actions if LOW_PRIORITY_RE.search(a["action"])]
@@ -1484,9 +1553,20 @@ def cleanup_plan() -> dict:
     for items in by_note.values():
         best = min(items, key=lambda a: (PRIORITY_RANK[a["priority"]], a["line"]))
         extras += [a for a in items if a is not best and not a["due"]]
-    ids = [action_id(a) for a in junk + extras]
-    return {"open": len(actions), "junk": len(junk), "extras": len(extras), "ids": ids,
-            "left": len(actions) - len(ids), "notes": len({a["path"] for a in actions})}
+    gone = junk_ids | {action_id(a) for a in extras}
+    kept = [a for a in actions if a["section"] == "Action items" and action_id(a) not in gone]
+    dup_ids: set[str] = set()
+    for habit in actions:
+        if habit["section"] != "Habit to try" or action_id(habit) in gone:
+            continue
+        twin = next((a for a in kept if a["path"] == habit["path"]
+                     and similar_idea(habit["action"], a["action"])), None)
+        if twin:
+            dup_ids.add(action_id(twin) if habit["due"] and not twin["due"] else action_id(habit))
+    ids = [action_id(a) for a in junk + extras] + sorted(dup_ids)
+    return {"open": len(actions), "junk": len(junk), "extras": len(extras), "dups": len(dup_ids),
+            "ids": ids, "left": len(actions) - len(ids),
+            "notes": len({a["path"] for a in actions})}
 
 
 def skip_actions_by_id(ids: list[str]) -> list[str]:
@@ -2019,9 +2099,9 @@ ACT_AS = {
 def plan_parts(path: Path) -> dict:
     """What a plan needs from one note (only the note's own content)."""
     s = note_sections(path)
-    actions = [split_due(re.sub(r"^- \[ \] (?:🔥 |🔽 )?(?:[🤖🧠🔗] )?", "", line))[0] for line in
-               s.get("Action items", []) + s.get("Habit to try", [])
-               if line.startswith("- [ ] ")]
+    actions = drop_repeats([split_due(re.sub(r"^- \[ \] (?:🔥 |🔽 )?(?:[🤖🧠🔗] )?", "", line))[0]
+                            for line in s.get("Action items", []) + s.get("Habit to try", [])
+                            if line.startswith("- [ ] ")])
     # "Comment X / DM me / link in bio" are ways to reach the creator: Claude can't do
     # them, so they go into a separate "backup" part instead of the actions.
     all_points = [line.lstrip("- ") for line in s.get("Key points", [])]

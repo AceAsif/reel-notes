@@ -57,7 +57,7 @@ def format_reply(data: dict, note_path: Path) -> str:
     if data.get("lesson"):
         parts += ["", f"💡 Lesson: {data['lesson']}"]
     if data.get("habit"):
-        parts += ["", f"🔁 Habit to try: {data['habit']}"]
+        parts += ["", f"🔁 Habit to try: {processor.habit_prefix(data)}{data['habit']}"]
     if data["key_points"]:
         parts += ["", "Key points:", *[f"• {p}" for p in data["key_points"]]]
     if data["resources"]:
@@ -1299,7 +1299,10 @@ def cleanup_text(plan: dict) -> str:
             f"You have {plan['open']} open actions from {plan['notes']} notes.\n"
             f"• {plan['junk']} are \"comment X / DM me\" offers. They are not real actions.\n"
             f"• {plan['extras']} are extra actions from notes that have more than one. "
-            "I keep the best one per note, and anything with a due date.\n\n"
+            "I keep the best one per note, and anything with a due date.\n"
+            + (f"• {plan['dups']} are the same idea twice (a habit and an action). "
+               "I keep one of them.\n" if plan.get("dups") else "")
+            + "\n"
             f"I would skip {skip} and keep {plan['left']}. "
             "Skipped actions stay in the notes, marked ❌.")
 

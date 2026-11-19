@@ -76,7 +76,7 @@ Reel video ───────────────────────
 
 - 💬 **Key quote**: the strongest sentence, word for word. If the AI reworded it, it's marked *(paraphrased)*, because the bot checks the quote against the transcript.
 - 💡 **Main lesson**: one plain sentence.
-- 🔁 **Habit to try**: one small, specific habit. It appears in `/todo`, so you can tick it off with `/done`.
+- 🔁 **Habit to try**: one small, specific habit. It appears in `/todo`, so you can tick it off with `/done`. If the AI also gave an action that says the same thing, you get **one** to-do, not two: the habit, with the priority of that action (shown as `🔥 🧠`).
 
 **The post caption is read too**, because creators often put links and details there. It's given to the AI, saved in the note under `## Post caption`, and links in it count as real (not invented).
 
@@ -155,7 +155,9 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 ## Clean up old actions
 
 - `/cleanup` shows what it would skip and asks first. Tap **Yes** to do it.
-- It skips: (1) old "comment X / DM me" actions, and (2) the extra actions in a note that has more than one. It keeps the best action per note, anything with a due date, and every "Habit to try".
+- It skips: (1) old "comment X / DM me" actions, (2) the extra actions in a note that has more than one, and (3) a "Habit to try" that says the same thing as an action in the same note (older notes have both, so the same idea is in `/todo` twice). It keeps the best action per note, anything with a due date, and every other "Habit to try". For (3) it keeps the action and skips the habit, unless only the habit has a due date.
+- "The same thing" is decided by shared words, without AI. Words about *when* ("every morning") are ignored.
+- `/undocleanup` puts the last clean-up back.
 - Skipped actions stay in the note, marked ❌. Nothing is deleted.
 - The Sunday review suggests `/cleanup` when you have more than 30 open actions.
 
