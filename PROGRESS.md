@@ -1,28 +1,35 @@
-# Progress - X (x.com and twitter.com) video links
-Branch: feature/x-links
-Last updated: 2026-11-18
+# Progress - Fallback when the notes folder (Google Drive) is missing
+Branch: fix/notes-folder-fallback
+Last updated: 2026-11-19
+
+## The problem (seen in a real chat)
+Google Drive for desktop was not running, so drive G: did not exist. Every link failed with
+"[WinError 3] The system cannot find the path specified: 'G:\\'". The cause: `save_note` made the
+notes folder as its LAST step, after the download, Whisper and the AI. So the bot did 1-2 minutes of
+work and then lost the result. Commands like /todo already said "folder missing", but capture did not.
 
 ## Done
-- Step 1: `LINK_PATTERN` in bot.py accepts `x.com` and `twitter.com` (also `www.`, `mobile.`, `m.`).
-  It does not accept look-alikes such as `linux.com`, `fixupx.com` or `vxtwitter.com`.
-  The `/start` text mentions X.
-- Step 2: `processor.download_media` sends X links through yt-dlp like the other sites (yt-dlp has an
-  X extractor). For X links the cookies file is NEVER used, and no login option is set.
-- Step 3: if yt-dlp fails for any reason (no video in the post, needs a login, too long, network), the
-  bot replies "I could not get this X video. Please save the video and send me the file." The real
-  yt-dlp error goes to bot.log on a line that starts with `x: yt-dlp failed:` (the address is logged
-  without the ?s=... tracking part). Other sites keep their old error messages.
-- Step 4: `normalise_url`: x.com, twitter.com and mobile links to one post are the same post
-  (duplicate check).
-- Step 5: 34 new tests with a fake yt-dlp (no network). README. Tests: 346 passed.
+- Step 1: `write_note_file`: write the note to the notes folder. If that fails (OSError: missing drive,
+  offline Drive, no permission), write it to `notes/pending` on this PC and log the real error
+  (`notes:` line in bot.log). `NOTES_PENDING_DIR` can change the folder. `notes/` is already private
+  (.gitignore, deny rules, commit check).
+- Step 2: `sync_pending`: when the notes folder is back, copy each pending note, check the size, then
+  delete it from the PC. Never overwrites (a name that exists gets _2, _3). If a copy fails the note
+  stays and it is tried again. The bot's 5-minute check (`run_due_jobs`) calls it and sends
+  "Your notes folder is back. Moved N notes from this PC to it."
+- Step 3: the Telegram reply warns when a note was kept on the PC. "I can't see your notes folder" now
+  says new reels are still saved on this PC, and how many are waiting. /health shows them.
+- Step 4: the duplicate check also looks in the pending folder.
+- Step 5: 17 new tests (a folder on a drive that does not exist, the whole pipeline, moving back, name
+  clashes, failed and bad copies, the messages). README: steps to bring Google Drive back, Troubleshooting
+  row, `NOTES_PENDING_DIR`. Tests: 363 passed.
 
 ## Next step
-- Test with one public X video link (see the pull request text).
-- If it fails, send the `x: yt-dlp failed:` line from bot.log. Often `/update` (new yt-dlp) fixes it.
+- Owner: bring Google Drive back (see the README steps), pull, restart the bot.
+- The reels that failed (4 links) were not saved. Send them again.
 
 ## Decisions
-- The message says "X video", not "Threads video". Same sentence, right name.
-- Any failure for an X link gives that message. A text-only or picture-only post gets it too (yt-dlp
-  cannot tell us more, and the real reason is in bot.log).
-- No browser, no login, no cookies, no extra requests: only yt-dlp.
-- Not done on purpose: look-alike domains (fixupx, vxtwitter), t.co short links, X profile links.
+- Capture never depends on Google Drive any more. Reading (/todo, /search...) still needs the notes
+  folder: notes waiting on the PC are not in /todo until they are moved.
+- Fallback folder is inside the project's `notes/` folder, so no new private path is needed.
+- Not done: a /sync command (the 5-minute check does it); showing pending notes in /todo.
