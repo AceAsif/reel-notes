@@ -200,6 +200,26 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 - `/health` checks everything the bot needs: Ollama and the model, ffmpeg, Tesseract, yt-dlp, the notes folder (Google Drive) and free disk space.
 - yt-dlp updates itself every night at 03:30 (`YTDLP_UPDATE_TIME` in `.env`, or `off`). You only get a message if it updated or failed. `/update` does it now. After an update, restart the bot from the tray icon.
 
+## If Google Drive is missing
+
+Your notes folder can be on Google Drive (for example `G:\My Drive\Reel Notes`). If Google Drive is not running, that drive does not exist, and Windows shows only C:, D: and so on in **This PC**. Then the bot cannot save into it.
+
+**What the bot does now.** A note is **never lost**:
+
+- The note is saved on the PC, in `notes\pending` inside the project folder (change it with `NOTES_PENDING_DIR` in `.env`).
+- The reply says so: *Your notes folder is not ready... This note is saved on this PC and moves there when it is back.*
+- When the notes folder is back, the bot moves the notes by itself (it checks about every 5 minutes) and sends you: *Your notes folder is back. Moved N notes from this PC to it.* A note is copied, checked, and only then deleted from the PC. An old note is never overwritten.
+- Until then, `/todo`, `/notes` and similar commands say the folder is missing and how many notes are waiting. `/health` shows the waiting notes too.
+- The real error is written to `bot.log` (search for `notes:`).
+
+**How to bring Google Drive back** (the menu words can differ a little in your version):
+
+1. Look for the Google Drive icon near the clock. It may be hidden under the **^** arrow. If it is not there, open **Google Drive** from the Start menu.
+2. If it asks you to sign in, sign in with the same Google account.
+3. Wait a minute, then open **This PC**. You should see a Google Drive drive (for example `G:`). If it has a different letter, put the new path in `NOTES_DIR` in `.env` and restart the bot.
+4. To start Google Drive when Windows starts: open the Google Drive icon, then the settings (gear) and **Preferences**, and look for the option to launch Google Drive at startup.
+5. Still missing? Restart the PC. If it is still missing, reinstall **Google Drive for desktop**. Your notes are safe: they are also in your Google Drive online.
+
 ## Notes on your phone
 
 **Easiest:** use the bot itself. `/notes` then `/note 3` shows a note nicely in Telegram.
@@ -287,6 +307,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `WHISPER_MODEL` | `small` | `medium` is more accurate but slower |
 | `TESSERACT_CMD` | — | Windows: `C:\Program Files\Tesseract-OCR\tesseract.exe` |
 | `NOTES_DIR` | `notes` | Where notes are saved |
+| `NOTES_PENDING_DIR` | `notes\pending` | Where new notes wait if `NOTES_DIR` is missing (see above) |
 | `TIMEZONE` | `UTC` | Your time zone, e.g. `Europe/London`. Used for the nudge and review times |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
 | `MAX_MINUTES` | `10` | Longest video accepted (for YouTube links) |
@@ -313,6 +334,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `open() got an unexpected keyword argument 'metadata_errors'` | `pip install "av>=12,<14"` |
 | Hugging Face symlink warnings | Harmless. Add `HF_HUB_DISABLE_SYMLINKS_WARNING=1` to `.env` |
 | `tesseract not found` | Set `TESSERACT_CMD` in `.env` |
+| `The system cannot find the path specified: 'G:\'` or "I can't see your notes folder" | Google Drive is not running. See *If Google Drive is missing* above. New notes are kept on the PC until it is back |
 | Bot stops right after "Bot is running" | Check `.env` exists and the token is correct |
 | `.bat` / `.vbs` file blocked by Windows ("Smart App Control has blocked...") | See below |
 | `NetworkError: Bad Gateway` / `TimedOut` in `bot.log` | Telegram's servers had a short outage. Nothing to fix: the bot retries automatically. If a reel got no reply, send the link again |

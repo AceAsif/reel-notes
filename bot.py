@@ -76,6 +76,9 @@ def format_reply(data: dict, note_path: Path) -> str:
         parts += ["", "💭 Other ideas (not on your to-do list):",
                   *[f"• {i}" for i in data["other_ideas"]]]
     parts += ["", f"Saved: {note_path.name}"]
+    if processor.is_pending(note_path):
+        parts.append("⚠️ Your notes folder is not ready (is Google Drive running?). "
+                     "This note is saved on this PC and moves there when it is back.")
     if data.get("timings"):
         parts.append(f"⏱ {processor.timing_text(data['timings'])}")
     return "\n".join(parts)[:4000]  # Telegram message limit is 4096
@@ -394,7 +397,7 @@ def todo_page(page: int = 1, level: str | None = None,
     /done 23 works from any page. level='high' shows only 🔥 actions; kind='ai'
     (or 'habit', 'lookup') shows only that type."""
     if not processor.notes_ready():
-        return processor.NOTES_MISSING, None
+        return processor.notes_missing_text(), None
     all_actions = list(enumerate(processor.open_actions(), start=1))
     if not all_actions:
         return "🎉 No open action items.", None
@@ -808,7 +811,7 @@ async def notes_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not is_allowed(update):
         return
     if not processor.notes_ready():
-        await update.message.reply_text(processor.NOTES_MISSING)
+        await update.message.reply_text(processor.notes_missing_text())
         return
     files = sorted(processor.NOTES_DIR.glob("*.md"), reverse=True)[:10]
     if not files:
@@ -968,7 +971,7 @@ async def prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not is_allowed(update):
         return
     if not processor.notes_ready():
-        await update.message.reply_text(processor.NOTES_MISSING)
+        await update.message.reply_text(processor.notes_missing_text())
         return
     numbers = [int(x) for x in re.findall(r"\d+", " ".join(context.args or []))]
     if not numbers:
@@ -984,7 +987,7 @@ async def prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def send_nudge(bot, chat_id: int, intro: str) -> None:
     if not processor.notes_ready():
-        await bot.send_message(chat_id, processor.NOTES_MISSING)
+        await bot.send_message(chat_id, processor.notes_missing_text())
         return
     action = processor.pick_nudge()
     if action is None:
@@ -1312,7 +1315,7 @@ async def cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update):
         return
     if not processor.notes_ready():
-        await update.message.reply_text(processor.NOTES_MISSING)
+        await update.message.reply_text(processor.notes_missing_text())
         return
     plan = processor.cleanup_plan()
     if not plan["ids"]:
@@ -1351,7 +1354,7 @@ async def undo_cleanup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not is_allowed(update):
         return
     if not processor.notes_ready():
-        await update.message.reply_text(processor.NOTES_MISSING)
+        await update.message.reply_text(processor.notes_missing_text())
         return
     count = processor.can_undo_cleanup()
     if not count:
@@ -1427,6 +1430,15 @@ JOB_SENDERS = {"nudge": daily_nudge, "weekly": weekly_digest, "resurface": weekl
 async def run_due_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send every scheduled message that is due and not sent yet (see above)."""
     async with _jobs_lock:                       # two checks at once must not send twice
+        moved = await asyncio.to_thread(processor.sync_pending)   # Drive is back? move the notes
+        if moved:
+            try:
+                await context.bot.send_message(
+                    context.job.chat_id,
+                    f"📁 Your notes folder is back. Moved {moved} note{'s' * (moved != 1)} "
+                    "from this PC to it.")
+            except (NetworkError, TimedOut):
+                pass                             # the notes are moved; only the message is lost
         sent = processor.load_sent_jobs()
         before = dict(sent)
         due = processor.due_jobs(datetime.datetime.now(TIMEZONE), sent, job_rules())

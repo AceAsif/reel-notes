@@ -9,6 +9,7 @@ Pipeline (all free, all local):
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -764,9 +765,8 @@ def slugify(text: str) -> str:
 
 def save_note(data: dict, transcript: str, screen: str, source: str,
               language: str = "en", caption: str = "") -> Path:
-    NOTES_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
-    path = NOTES_DIR / f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
+    name = f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
 
     lines = [
         f"# {data['title']}",
@@ -806,8 +806,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
     ]
     if caption:
         lines += ["## Post caption", caption, ""]
-    path.write_text("\n".join(lines), encoding="utf-8")
-    return path
+    return write_note_file(name, "\n".join(lines))
 
 
 MAX_VIDEOS = 10                       # most slides taken from one carousel post
@@ -1081,13 +1080,16 @@ def normalise_url(url: str) -> str:
 
 def find_note_by_source(url: str) -> Path | None:
     """Return the existing note for this reel link, if we already made one."""
-    if not url or not NOTES_DIR.exists():
+    if not url:
         return None
     target = normalise_url(url)
-    for note in sorted(NOTES_DIR.glob("*.md")):
-        for line in note.read_text(encoding="utf-8").splitlines()[:8]:
-            if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
-                return note
+    for folder in (NOTES_DIR, PENDING_DIR):       # also the notes waiting on this PC
+        if not folder.exists():
+            continue
+        for note in sorted(folder.glob("*.md")):
+            for line in note.read_text(encoding="utf-8").splitlines()[:8]:
+                if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
+                    return note
     return None
 
 
@@ -1290,6 +1292,81 @@ def notes_ready() -> bool:
 
 
 NOTES_MISSING = "📁 I can't see your notes folder. Is Google Drive running?"
+
+# ---- when the notes folder is not there (for example Google Drive is not running) --------
+# A note is never lost. It is saved on this PC in a "pending" folder, and it is moved to the
+# real notes folder by itself as soon as that folder is back. (`notes/` is already private:
+# it is in .gitignore, in the deny rules and in the commit check.)
+
+PENDING_DIR = Path(os.getenv("NOTES_PENDING_DIR")
+                   or Path(__file__).resolve().parent / "notes" / "pending")
+
+
+def _log_notes(detail: str) -> None:
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] notes: {detail}", flush=True)
+
+
+def write_note_file(name: str, text: str) -> Path:
+    """Write a note into the notes folder. If that folder can't be used, write it into
+    the pending folder on this PC instead (and say so in bot.log). Returns the file."""
+    try:
+        NOTES_DIR.mkdir(parents=True, exist_ok=True)
+        path = NOTES_DIR / name
+        path.write_text(text, encoding="utf-8")
+        return path
+    except OSError as exc:
+        PENDING_DIR.mkdir(parents=True, exist_ok=True)
+        path = PENDING_DIR / name
+        path.write_text(text, encoding="utf-8")
+        _log_notes(f"notes folder not available ({exc!r}). Saved {name} in {PENDING_DIR} for now")
+        return path
+
+
+def pending_notes() -> list[Path]:
+    """Notes saved on this PC while the notes folder was missing."""
+    return sorted(PENDING_DIR.glob("*.md")) if PENDING_DIR.is_dir() else []
+
+
+def is_pending(path: Path) -> bool:
+    return Path(path).parent.resolve() == PENDING_DIR.resolve()
+
+
+def sync_pending() -> int:
+    """Move the pending notes into the notes folder, once that folder is back.
+    Returns how many were moved. A note is copied, checked, and only then deleted from the
+    PC. A note with the same name is never overwritten (the new one gets _2, _3...)."""
+    waiting = pending_notes()
+    if not waiting or not notes_ready() or PENDING_DIR.resolve() == NOTES_DIR.resolve():
+        return 0
+    moved = 0
+    for source in waiting:
+        target = NOTES_DIR / source.name
+        n = 2
+        while target.exists():
+            target = NOTES_DIR / f"{source.stem}_{n}{source.suffix}"
+            n += 1
+        try:
+            shutil.copy2(source, target)
+            if target.stat().st_size != source.stat().st_size:
+                target.unlink(missing_ok=True)
+                raise OSError("the copy has a different size")
+            source.unlink()
+        except OSError as exc:
+            _log_notes(f"could not move {source.name} to the notes folder: {exc!r}. Will try again")
+            break
+        moved += 1
+    if moved:
+        _log_notes(f"moved {moved} note(s) from {PENDING_DIR} to {NOTES_DIR}")
+    return moved
+
+
+def notes_missing_text() -> str:
+    """What the bot says when the notes folder can't be seen."""
+    waiting = len(pending_notes())
+    text = NOTES_MISSING + "\nNew reels are still saved on this PC and move over when it is back."
+    if waiting:
+        text += f"\n💾 {waiting} note{'s' * (waiting != 1)} waiting on this PC."
+    return text
 
 
 def notes_with_tag(tag: str) -> list[Path]:
@@ -2394,4 +2471,8 @@ def health_checks() -> list[tuple[bool, str, str]]:
         checks.append((free_gb > 2, "Free disk space", f"{free_gb:.0f} GB"))
     else:
         checks.append((False, "Notes folder", f"{NOTES_DIR} not found. Is Google Drive running?"))
+    waiting = len(pending_notes())
+    if waiting:
+        checks.append((False, "Notes waiting on this PC",
+                       f"{waiting}. They move to the notes folder when it is back"))
     return checks
