@@ -79,6 +79,16 @@
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py\""
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard compact",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -89,6 +99,26 @@
             "type": "command",
             "timeout": 180,
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_commit_check.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard search --strict",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard read --strict",
+            "timeout": 10
           }
         ]
       }
