@@ -1513,6 +1513,66 @@ def complete_actions(numbers: list[int], mark: str = "x") -> list[str]:
     return [a["action"] for a in chosen]
 
 
+# ---- "What did you learn?": one line saved under a done action --------------------------------
+# After you tick an action, the bot asks for one line. It is saved in the note, right under
+# the done action, like this (two spaces in front, so it is NOT a to-do and not an action line):
+#   - [x] Read the docs ✅ 2026-11-20
+#     - 💡 Learned: the docs have a quick start page
+# The to-do code ignores it. /month shows it, and /ask and chat can find it.
+
+LEARNED_PREFIX = "  - 💡 Learned: "
+MAX_LEARNING = 300
+SKIP_ANSWERS = {"skip", "no", "none", "nothing", "n/a", "na", "later", "pass", "-"}
+
+
+def clean_learning(text) -> str:
+    """One short plain line from what you typed. '' means nothing to save (empty, or "skip")."""
+    one = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", str(text or "")).split())
+    one = re.sub(r"^(?:[-*•]|\d+[.)])\s+", "", one)               # a leading bullet or number
+    if one.lower().strip(" .!") in SKIP_ANSWERS:
+        return ""
+    return one if len(one) <= MAX_LEARNING else one[:MAX_LEARNING - 1].rstrip() + "…"
+
+
+def done_line_text(line: str) -> str | None:
+    """'- [x] 🔥 🧠 Do it 📅 2026-11-20 ✅ 2026-11-19' -> 'Do it'. None if it is not a done line."""
+    if not line.startswith("- [x] "):
+        return None
+    rest = re.sub(r"\s*✅ \d{4}-\d{2}-\d{2}\s*$", "", line[6:])
+    rest = split_kind(split_priority(rest)[1])[1]
+    return split_due(rest)[0].strip()
+
+
+def find_note_file(name: str) -> Path | None:
+    """The note by file name: in the notes folder, or waiting on this PC."""
+    for folder in (NOTES_DIR, PENDING_DIR):
+        if (folder / name).is_file():
+            return folder / name
+    return None
+
+
+def add_learning(note_name: str, action_text: str, learning: str) -> bool:
+    """Save one line under the done action. A second answer replaces the first.
+    Returns False if there is nothing to save or the done action is not in the note."""
+    learning = clean_learning(learning)
+    path = find_note_file(note_name)
+    if not learning or path is None:
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    matches = [i for i, ln in enumerate(lines) if done_line_text(ln) == action_text.strip()]
+    if not matches:
+        return False
+    today = f"✅ {datetime.now():%Y-%m-%d}"
+    i = ([m for m in matches if lines[m].rstrip().endswith(today)] or matches)[-1]
+    line = LEARNED_PREFIX + learning
+    if i + 1 < len(lines) and lines[i + 1].startswith(LEARNED_PREFIX):
+        lines[i + 1] = line
+    else:
+        lines.insert(i + 1, line)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True
+
+
 # ---- weekly stats ---------------------------------------------------------
 
 DONE_DATE_RE = re.compile(r"^- \[(x|-)\] .*(✅|❌) (\d{4}-\d{2}-\d{2})\s*$")
@@ -1528,7 +1588,7 @@ def stats_between(start: date, end: date) -> dict:
     """Reels saved, actions done/skipped (with their texts), categories and tags
     between two dates (inclusive), plus what's still open now."""
     stats = {"start": start, "end": end, "saved": 0, "done": 0, "skipped": 0,
-             "categories": {}, "tags": {}, "done_items": []}
+             "categories": {}, "tags": {}, "done_items": [], "learned": []}
     if NOTES_DIR.exists():
         for path in sorted(NOTES_DIR.glob("*.md")):
             try:
@@ -1543,13 +1603,17 @@ def stats_between(start: date, end: date) -> dict:
                 stats["categories"][cat] = stats["categories"].get(cat, 0) + 1
                 for t in read_tags(path):
                     stats["tags"][t] = stats["tags"].get(t, 0) + 1
-            for line in text.splitlines():
+            note_lines = text.splitlines()
+            for n, line in enumerate(note_lines):
                 m = DONE_DATE_RE.match(line)
                 if m and start <= date.fromisoformat(m.group(3)) <= end:
                     if m.group(1) == "x":
                         stats["done"] += 1
                         item = re.sub(r"^- \[x\] (🔥 |🔽 )?", "", line)
                         stats["done_items"].append(re.sub(r"\s*✅ \S+\s*$", "", item))
+                        after = note_lines[n + 1] if n + 1 < len(note_lines) else ""
+                        if after.startswith(LEARNED_PREFIX):
+                            stats["learned"].append(after[len(LEARNED_PREFIX):].strip())
                     else:
                         stats["skipped"] += 1
     actions = open_actions()

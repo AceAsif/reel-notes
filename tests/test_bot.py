@@ -84,8 +84,11 @@ def test_message_routing(text, handler):
 
 
 class FakeMessage:
-    def __init__(self, text): self.text, self.replies = text, []
-    async def reply_text(self, t, reply_markup=None): self.replies.append(t)
+    def __init__(self, text):
+        self.text, self.replies, self.reply_to_message = text, [], None
+    async def reply_text(self, t, reply_markup=None):
+        self.replies.append(t)
+        return types.SimpleNamespace(message_id=100 + len(self.replies))   # like Telegram's Message
 
 
 def run_chat(text, chat_data, monkeypatch, fake):
@@ -453,7 +456,7 @@ def test_done_uses_numbers_from_last_todo(tmp_path, monkeypatch):
     context.args = ["1"]
     upd = update()
     asyncio.run(bot.done(upd, context))
-    assert "Read the docs" in upd.message.replies[-1]
+    assert "Read the docs" in upd.message.replies[0]      # (the next reply asks what you learned)
     assert "- [x] Read the docs" in old.read_text(encoding="utf-8")
     assert [a["action"] for a in bot.processor.open_actions()] == ["Install tool"]
     upd = update()                                            # number 1 is gone now
