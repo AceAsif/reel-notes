@@ -4,6 +4,9 @@ Written on 2026-11-16, after batch 3 (`main` at "Just removed whitespace").
 Read: `docs/HANDOVER.md`, `docs/REVIEW_BY_FABLE.md`, `PROGRESS.md`, `README.md`,
 `processor.py`, `bot.py`. Tests: 205 pass. No code was changed. Only this file was added.
 
+**Status on 2026-11-21:** ideas 1, 2, 3, 8, 14 and 16 are built. The live to-do list is in
+`docs/HANDOVER.md`, section 10. This file stays as the first list, with the reasons.
+
 Not read: `.env`, `notes/`, `bot.log`, `cookies.txt`, `reminders.json`.
 So I do not know what your notes say or which commands you really use. Where I guess, I say so.
 
