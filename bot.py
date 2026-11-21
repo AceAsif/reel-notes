@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before importing processor so it sees .env values
 
 import requests  # noqa: E402
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
 from telegram.constants import ChatAction  # noqa: E402
 from telegram.error import NetworkError, TimedOut  # noqa: E402
 from telegram.ext import (  # noqa: E402
@@ -516,6 +516,48 @@ async def todo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass                                    # same page pressed again: nothing changed
 
 
+# ---- "What did you learn?" after a Done ---------------------------------------------------------
+ASK_LEARNING = os.getenv("ASK_LEARNING", "on").strip().lower() != "off"     # "off" = never ask
+LEARN_QUESTION = ("💡 What did you learn? Reply to this message with one line.\n"
+                  "(Reply \"skip\" if there is nothing.)")
+MAX_LEARN_QUESTIONS = 20          # questions the bot remembers (in memory only)
+
+
+async def ask_learning(message, context, action: dict) -> None:
+    """After a Done, ask for one line. The answer only counts when you REPLY to this question,
+    so a normal chat message is never taken by mistake. Nothing happens if you ignore it."""
+    if not ASK_LEARNING:
+        return
+    try:
+        question = await message.reply_text(
+            LEARN_QUESTION, reply_markup=ForceReply(input_field_placeholder="One line..."))
+    except (NetworkError, TimedOut):
+        return                                        # no internet: the Done is already saved
+    waiting = context.user_data.setdefault("learn_q", {})
+    waiting[question.message_id] = {"note": action["path"].name, "text": action["action"]}
+    while len(waiting) > MAX_LEARN_QUESTIONS:         # forget the oldest questions
+        waiting.pop(next(iter(waiting)))
+
+
+async def save_learning(update: Update, context: ContextTypes.DEFAULT_TYPE, key: int) -> None:
+    """Your reply to the question: save it under the done action."""
+    waiting = context.user_data["learn_q"]
+    learning = processor.clean_learning(update.message.text)
+    if not learning:                                  # "skip", or nothing to save
+        waiting.pop(key, None)
+        await update.message.reply_text("OK, no problem.")
+        return
+    try:
+        saved = await asyncio.to_thread(processor.add_learning, waiting[key]["note"],
+                                        waiting[key]["text"], learning)
+    except OSError:                                   # notes folder not reachable: try again later
+        await update.message.reply_text(processor.notes_missing_text() + "\nReply again later.")
+        return
+    waiting.pop(key, None)
+    await update.message.reply_text("💡 Saved in the note. Well done!" if saved
+                                    else "I could not find that action in the note any more.")
+
+
 async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        mark: str, command: str, heading: str) -> None:
     """Shared code for /done (mark 'x') and /skip (mark '-')."""
@@ -526,7 +568,10 @@ async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(
             f"Usage: /{command} 2  or  /{command} 1 3 4  (numbers come from /todo)")
         return
-    changed = processor.complete_actions(shown_numbers(context, numbers), mark)
+    now_numbers = shown_numbers(context, numbers)
+    before = processor.open_actions()
+    picked = [before[n - 1] for n in sorted(set(now_numbers)) if 1 <= n <= len(before)]
+    changed = processor.complete_actions(now_numbers, mark)
     if not changed:
         await update.message.reply_text("No matching numbers. Send /todo to see the list.")
         return
@@ -535,6 +580,8 @@ async def mark_actions(update: Update, context: ContextTypes.DEFAULT_TYPE,
              f"{remaining} open items left. Your numbers stay the same until you "
              "send /todo again."]
     await update.message.reply_text("\n".join(reply))
+    if mark == "x" and len(picked) == 1:              # one Done: ask what you learned
+        await ask_learning(update.message, context, picked[0])
 
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -699,6 +746,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = (update.message.text or "").strip()
     if not text:
+        return
+    replied = update.message.reply_to_message           # a reply to "What did you learn?"
+    if replied is not None and replied.message_id in context.user_data.get("learn_q", {}):
+        await save_learning(update, context, replied.message_id)
         return
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     history = context.chat_data.setdefault("chat_history", [])
@@ -1041,6 +1092,8 @@ async def nudge_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYP
     verb = "✅ Done" if what == "done" else "⏭ Skipped"
     await query.edit_message_text(f"{verb}: {action['action']}\n\n{left} open items left. "
                                   "Want another? /nudge")
+    if what == "done":
+        await ask_learning(query.message, context, action)
 
 
 # ---- reminders --------------------------------------------------------------
@@ -1265,6 +1318,10 @@ def month_text(previous: bool = False) -> str:
         lines += ["", "🏆 What you finished:"] + [f"   • {d}" for d in s["done_items"][:5]]
         if len(s["done_items"]) > 5:
             lines.append(f"   ...and {len(s['done_items']) - 5} more")
+    if s["learned"]:
+        lines += ["", "💡 What you learned:"] + [f"   • {t}" for t in s["learned"][:5]]
+        if len(s["learned"]) > 5:
+            lines.append(f"   ...and {len(s['learned']) - 5} more")
     lines += ["", f"📋 Still open: {s['open']}"
               + (f" ({s['open_high']} 🔥 high)" if s["open_high"] else "")]
     if s["done"] >= 10:

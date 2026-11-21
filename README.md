@@ -170,6 +170,16 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 - **Usage:** `/usage` shows how many times you used each command, so unused ones can be removed by fact. Only the command name is counted, never your message text. The counts are in `bot_state.json` (not in git).
 - **Search:** "what did I save about AI and uv?" now finds short topic words like AI and uv, and ignores words like "did" and "save".
 
+## Done, with one line of what you learned
+
+- When you tick **one** action (the **✅ Done** button on a nudge or reminder, or `/done 3`), the bot asks: *What did you learn? Reply to this message with one line.*
+- Your reply is saved in the note, right under the action, like this: `  - 💡 Learned: the docs have a quick start page`. It is not a to-do. Reply a second time to change it.
+- Reply **skip** if there is nothing to say, or just ignore the question. Nothing is lost.
+- Only a **reply** to the question counts. If you type a normal message instead, it is a normal chat message. The bot remembers the last 20 questions (until it restarts).
+- `/done 1 3 4` and `/skip` do not ask.
+- `/month` shows what you learned (the last 5). Chat and `/ask` can find it, and `/search` too, because it is saved in the note.
+- To turn the question off, set `ASK_LEARNING=off` in `.env`.
+
 ## Numbers in /todo
 
 - `/done 3`, `/skip 3`, `/high 3`, `/due 3 friday` and `/remind 3 friday` use the numbers from the **last `/todo` you saw**.
@@ -311,6 +321,7 @@ The bot only works while it is running. Messages sent while it's off wait on Tel
 | `TIMEZONE` | `UTC` | Your time zone, e.g. `Europe/London`. Used for the nudge and review times |
 | `FRAME_EVERY_SECONDS` | `2` | How often a frame is read for on-screen text |
 | `MAX_MINUTES` | `10` | Longest video accepted (for YouTube links) |
+| `ASK_LEARNING` | `on` | Ask "What did you learn?" after a Done; `off` to disable |
 | `RESURFACE` | `on` | Weekly "remember this?" message; `off` to disable |
 | `NUDGE_TIME` | `08:00` | Time for the daily nudge (24-hour), or `off` |
 | `COOKIES_FILE` | — | Only if Instagram/Facebook downloads need a login |

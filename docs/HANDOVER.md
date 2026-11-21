@@ -102,6 +102,8 @@ Action line formats (Obsidian Tasks style):
 `- [ ] 🔥 text 📅 2026-11-20` (high / due date), `- [ ] text` normal, `- [ ] 🔽 text` low,
 `- [x] ... ✅ date` done, `- [-] ... ❌ date` skipped.
 Only lines under "Action items" and "Habit to try" count as actions.
+A done action can have ONE indented line under it: `  - 💡 Learned: text` (your reply to "What did you
+learn?"). It is not an action and the to-do code ignores it (`LEARNED_PREFIX`, `add_learning`).
 `action_id` = md5(file name + action text)[:10]. It does not use the line number, so it
 survives hand edits and priority / due-date changes. Old `hash:line` ids in saved
 reminders still work (`legacy_action_id`).
@@ -140,6 +142,9 @@ reminders still work (`legacy_action_id`).
 - **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
   actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
   The Sunday review hints at it above 30 open actions.
+- **Learning:** after ONE Done (button or `/done N`) the bot asks "What did you learn?" with a
+  `ForceReply`. Only a reply to that question is saved (`bot.save_learning`); `ASK_LEARNING=off`
+  turns it off. `/month` shows the learnings.
 - **Timing:** each note logs `timing: ...` in `bot.log` and shows `⏱` in the reply.
 - **Catch-up:** all scheduled jobs go through `run_due_jobs` (exact time, 20 s after start,
   every 5 min). A message missed while the PC was off or asleep is sent when it is back.
