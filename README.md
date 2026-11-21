@@ -207,6 +207,11 @@ Send a screenshot (or several as one album) to the bot. It reads the text (OCR) 
 ## Fixing and checking the bot
 
 - `/redo` makes your newest note again (e.g. after changing the AI model). `/redo llm wiki` picks a note by its title; `/notes` then `/redo 2` works too. The bot asks first. The old note moves to an `old` folder inside your notes folder, so nothing is lost.
+- `/redo fast` (or `/redo fast 2`, `/redo fast llm wiki`) makes the note again from the text **saved in the note**: no download, no listening, no screen reading. Only the AI runs, so it takes seconds. Use it to bring an older note to the new format, or to try another AI model. It also works for notes made from screenshots or a video file.
+  - The note keeps its **date** and your **tags**.
+  - Your **done and skipped** actions and your 💡 learnings are kept. An action you already did or skipped is not opened again.
+  - Open actions are made new by the AI. Their due dates and reminders are not kept.
+  - A very old note without saved text cannot be redone fast. Then use `/redo` (download again).
 - `/health` checks everything the bot needs: Ollama and the model, ffmpeg, Tesseract, yt-dlp, the notes folder (Google Drive) and free disk space.
 - yt-dlp updates itself every night at 03:30 (`YTDLP_UPDATE_TIME` in `.env`, or `off`). You only get a message if it updated or failed. `/update` does it now. After an update, restart the bot from the tray icon.
 

@@ -764,8 +764,11 @@ def slugify(text: str) -> str:
 
 
 def save_note(data: dict, transcript: str, screen: str, source: str,
-              language: str = "en", caption: str = "") -> Path:
-    now = datetime.now()
+              language: str = "en", caption: str = "", saved_at: datetime | None = None,
+              keep_existing: bool = False) -> Path:
+    """Write the note. `saved_at` keeps an older date (used by /redo fast).
+    `keep_existing=True` never overwrites a note that has the same file name."""
+    now = saved_at or datetime.now()
     name = f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
 
     lines = [
@@ -806,7 +809,7 @@ def save_note(data: dict, transcript: str, screen: str, source: str,
     ]
     if caption:
         lines += ["## Post caption", caption, ""]
-    return write_note_file(name, "\n".join(lines))
+    return write_note_file(name, "\n".join(lines), keep_existing)
 
 
 MAX_VIDEOS = 10                       # most slides taken from one carousel post
@@ -1306,17 +1309,27 @@ def _log_notes(detail: str) -> None:
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] notes: {detail}", flush=True)
 
 
-def write_note_file(name: str, text: str) -> Path:
+def _free_name(folder: Path, name: str) -> Path:
+    """folder/name, or folder/name_2.md, _3... if that file already exists."""
+    path, n = folder / name, 2
+    while path.exists():
+        path = folder / f"{Path(name).stem}_{n}.md"
+        n += 1
+    return path
+
+
+def write_note_file(name: str, text: str, keep_existing: bool = False) -> Path:
     """Write a note into the notes folder. If that folder can't be used, write it into
-    the pending folder on this PC instead (and say so in bot.log). Returns the file."""
+    the pending folder on this PC instead (and say so in bot.log). Returns the file.
+    With keep_existing=True a note with the same name is never overwritten."""
     try:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
-        path = NOTES_DIR / name
+        path = _free_name(NOTES_DIR, name) if keep_existing else NOTES_DIR / name
         path.write_text(text, encoding="utf-8")
         return path
     except OSError as exc:
         PENDING_DIR.mkdir(parents=True, exist_ok=True)
-        path = PENDING_DIR / name
+        path = _free_name(PENDING_DIR, name) if keep_existing else PENDING_DIR / name
         path.write_text(text, encoding="utf-8")
         _log_notes(f"notes folder not available ({exc!r}). Saved {name} in {PENDING_DIR} for now")
         return path
@@ -2466,6 +2479,167 @@ def archive_note(path: Path) -> Path:
         target = old_dir / f"{name.stem}_{datetime.now():%H%M%S}.md"
     path.replace(target)
     return target
+
+
+# ---- /redo fast: make a note again from the text saved in it (no download) ---------------
+# A note keeps what it was made from: "## Transcript", "## On-screen text" (in a code fence)
+# and "## Post caption". /redo fast gives that text to the AI again, so an older note gets
+# the new format in seconds: no download, no Whisper, no OCR. It works for screenshot and
+# video-file notes too. Your history is kept: done and skipped actions (with their
+# "Learned" line) are copied into the new note, and an action you already did or skipped
+# is not opened again. The note keeps its date and your tags.
+
+class RedoNotPossible(RuntimeError):
+    """The message is ready to show in Telegram."""
+
+
+MSG_NO_SAVED_TEXT = ("This note has no saved transcript or screen text, so I can't make it "
+                     "again from the note. Use /redo to download it again.")
+FINISHED_RE = re.compile(r"^- \[(x|-)\] ")
+
+
+def _header_value(lines: list[str], key: str) -> str:
+    """'- Key: value' from the top of a note (before the first '## ' heading)."""
+    for line in lines:
+        if line.startswith("## "):
+            break
+        if line.startswith(f"- {key}: "):
+            return line[len(key) + 4:].strip()
+    return ""
+
+
+def _slide_counts(text: str) -> tuple[int, int]:
+    """'5 (3 videos, 2 photos)' -> (3, 2); '4 videos' -> (4, 0); '2 photos' -> (0, 2); '' -> (1, 0)."""
+    videos = re.search(r"(\d+) videos?", text)
+    photos = re.search(r"(\d+) photos?", text)
+    return (int(videos.group(1)) if videos else (0 if photos else 1),
+            int(photos.group(1)) if photos else 0)
+
+
+def _note_date(path: Path, lines: list[str]) -> datetime | None:
+    for value, form in ((_header_value(lines, "Date"), "%Y-%m-%d %H:%M"), (path.name[:15], "%Y-%m-%d_%H%M")):
+        try:
+            return datetime.strptime(value, form)
+        except ValueError:
+            continue
+    return None
+
+
+def saved_inputs(path: Path) -> dict | None:
+    """What a note was made from, read back from the note itself:
+    {'transcript', 'screen', 'caption', 'source', 'language', 'creator', 'video_count',
+     'photo_count', 'date', 'tags'}. None when the note has no saved text to work from."""
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if "## Transcript" not in lines:
+        return None
+    t = lines.index("## Transcript")
+    s = next((i for i in range(t + 1, len(lines)) if lines[i] == "## On-screen text"), len(lines))
+    transcript = "\n".join(lines[t + 1:s]).strip()
+    screen, after = "", s + 1
+    if s < len(lines):
+        j = s + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        fence = re.fullmatch(r"(`{3,})text", lines[j]) if j < len(lines) else None
+        end = next((k for k in range(j + 1, len(lines)) if lines[k] == fence.group(1)), None) \
+            if fence else None
+        if end is not None:                          # the normal case: text in a code fence
+            screen, after = "\n".join(lines[j + 1:end]), end + 1
+        else:                                        # older notes: plain text until the caption
+            end = next((k for k in range(s + 1, len(lines)) if lines[k] == "## Post caption"), len(lines))
+            screen, after = "\n".join(lines[s + 1:end]), end
+    c = next((k for k in range(min(after, len(lines)), len(lines)) if lines[k] == "## Post caption"), None)
+    caption = "\n".join(lines[c + 1:]).strip() if c is not None else ""
+    transcript = "" if transcript == "(no speech)" else transcript
+    screen = "" if screen.strip() == "(none)" else screen.strip()
+    if not (transcript or screen or caption):
+        return None
+    source = _header_value(lines, "Source")
+    videos, photos = _slide_counts(_header_value(lines, "Slides"))
+    return {"transcript": transcript, "screen": screen, "caption": caption,
+            "source": "" if source == "-" else source,
+            "language": (_header_value(lines, "Language").split() or ["en"])[0],
+            "creator": _header_value(lines, "Creator"), "video_count": videos,
+            "photo_count": photos, "date": _note_date(path, lines), "tags": read_tags(path)}
+
+
+def _todo_text(line: str) -> str:
+    """'- [x] 🔥 🧠 Do it 📅 2026-11-20 ✅ 2026-11-19' -> 'Do it' (any checkbox)."""
+    rest = re.sub(r"\s*(?:✅|❌) \d{4}-\d{2}-\d{2}\s*$", "", line[6:])
+    rest = split_kind(split_priority(rest)[1])[1]
+    return split_due(rest)[0].strip()
+
+
+def finished_items(lines: list[str]) -> list[list[str]]:
+    """Done and skipped to-dos of a note, each with its 'Learned' line if it has one."""
+    items, section = [], ""
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            section = line[3:].strip()
+        elif section in ("Action items", "Habit to try") and FINISHED_RE.match(line):
+            block = [line]
+            if i + 1 < len(lines) and lines[i + 1].startswith(LEARNED_PREFIX):
+                block.append(lines[i + 1])
+            items.append(block)
+    return items
+
+
+def carry_over(path: Path, finished: list[list[str]]) -> None:
+    """Put the old done/skipped to-dos into the new note. A new open to-do that is the same
+    idea as one of them is replaced by it (so it is not opened again). The rest goes to the
+    end of '## Action items'."""
+    if not finished:
+        return
+    left, out, section = list(finished), [], ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+        elif section in ("Action items", "Habit to try") and line.startswith("- [ ] "):
+            new = _todo_text(line)
+            twin = next((b for b in left if new == _todo_text(b[0])
+                         or similar_idea(new, _todo_text(b[0]))), None)
+            if twin:
+                out += twin
+                left.remove(twin)
+                continue
+        out.append(line)
+    if left:
+        start = out.index("## Action items") if "## Action items" in out else len(out)
+        end = next((k for k in range(start + 1, len(out)) if out[k].startswith("## ")), len(out))
+        while end > start + 1 and not out[end - 1].strip():
+            end -= 1
+        out[end:end] = [line for block in left for line in block]
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def redo_from_saved(path: Path) -> tuple[Path, dict]:
+    """/redo fast: make the note again from its saved text. Returns (new note, data).
+    The old note moves to old/. If anything fails, the old note stays where it was."""
+    saved = saved_inputs(path)
+    if saved is None:
+        raise RedoNotPossible(MSG_NO_SAVED_TEXT)
+    old_lines = path.read_text(encoding="utf-8").splitlines()
+    started = time.perf_counter()
+    data = summarise(saved["transcript"], saved["screen"], saved["caption"])   # the only slow step
+    timings = {"ai": time.perf_counter() - started}
+    data.update(language=saved["language"], video_count=saved["video_count"],
+                photo_count=saved["photo_count"], creator=saved["creator"], timings=timings)
+    if saved["tags"]:
+        data["tags"] = saved["tags"]                 # keep your tags (you may have renamed them)
+    archived = archive_note(path)                    # first, so the new note may take its name
+    new_path = None
+    try:
+        new_path = save_note(data, saved["transcript"], saved["screen"], saved["source"],
+                             saved["language"], saved["caption"], saved_at=saved["date"],
+                             keep_existing=True)
+        carry_over(new_path, finished_items(old_lines))
+    except Exception:
+        if new_path is not None and new_path.exists():
+            new_path.unlink()
+        archived.replace(path)                       # put the old note back
+        raise
+    log_timing(f"fast redo, {path.name}", timings)
+    return new_path, data
 
 
 # ---- yt-dlp auto-update -----------------------------------------------------
