@@ -1,6 +1,6 @@
 # Reel Notes: Handover Document
 
-Last updated: 2026-11-16. This document explains what the bot does, how it works,
+Last updated: 2026-11-21. This document explains what the bot does, how it works,
 and where it is weak, so a new reader (human or AI) can understand it fast and
 suggest improvements. Read it together with `README.md` (user guide) and the code.
 
@@ -53,7 +53,7 @@ processor.py ── all logic (no Telegram code)
 | `bot.py` (~1280 lines) | Telegram layer: handlers, inline buttons, jobs, formatting replies |
 | `processor.py` (~1770 lines) | Everything else (see section 5) |
 | `tray.py` | Windows tray icon: start/stop the bot, open log |
-| `tests/` | pytest, 262 tests (stubs for pytesseract and faster_whisper) |
+| `tests/` | pytest, 432 tests (stubs for pytesseract and faster_whisper) |
 | `PROGRESS.md` | Checkpoint file for the current task (see "checkpoint-and-report" workflow) |
 | `.env` | Settings (see section 8) |
 
@@ -112,7 +112,9 @@ reminders still work (`legacy_action_id`).
 
 ## 6. Features (commands)
 
-- **Capture:** link, video file, carousel link, screenshot(s).
+- **Capture:** link (Instagram, Facebook, YouTube Shorts, TikTok, X video posts), video file,
+  carousel link, screenshot(s). Threads links are coded (`threads_link.py`) but gave no video in a
+  real test: the bot then asks for the video file.
 - **Actions:** `/todo` (paged, ⏰ DUE SOON, 🔥/▫️/🔽 groups), `/done`, `/skip`, `/high` `/normal`
   `/low`, `/due` (dates), `/remind` (+ `/reminders`, `/unremind`; natural-language dates via
   `parse_when`), `/nudge`.
@@ -124,6 +126,10 @@ reminders still work (`legacy_action_id`).
   from the note(s) only (no AI call, nothing invented).
 - **Ops:** `/redo` (rebuild a note, old one moved to `old/`), `/health`, `/update`
   (yt-dlp), nightly yt-dlp auto-update.
+  `/redo fast` (`redo_from_saved`): rebuilds from the note's own `## Transcript`, `## On-screen text`
+  (fenced) and `## Post caption` (`saved_inputs`), so only the AI runs. Keeps the date and tags;
+  done/skipped lines and learnings are copied over (`carry_over`); a new action that is the same idea
+  as a finished one is not opened again. Never overwrites another note (`keep_existing`).
 - **New note:** one main action (`split_actions`: best priority first). Extra actions go to
   `## Other ideas` (plain bullets). "Comment X / DM me" offers are not actions: they go to
   `## From the creator`. No buttons (the A/B/C pick buttons were removed in batch 3).
@@ -142,6 +148,10 @@ reminders still work (`legacy_action_id`).
 - **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
   actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
   The Sunday review hints at it above 30 open actions.
+- **Notes folder missing** (Google Drive not running): the note is saved in `notes/pending` on the PC
+  and moved back by `sync_pending` (the 5-minute check) when the folder is back. Nothing is lost.
+- **One idea, one to-do:** a habit that says the same as an action is merged (`merge_habit_and_actions`);
+  old notes are handled by `/cleanup`.
 - **Learning:** after ONE Done (button or `/done N`) the bot asks "What did you learn?" with a
   `ForceReply`. Only a reply to that question is saved (`bot.save_learning`); `ASK_LEARNING=off`
   turns it off. `/month` shows the learnings.
@@ -179,9 +189,10 @@ These are the real pain points and honest gaps. Good places to start.
    details, or miss the main point (a recurring issue with long roadmap-style reels).
    There is no automatic quality check or second pass.
 2. **Whisper runs on CPU** (`device="cpu"`, int8) even though the PC has an 8 GB graphics card.
-   Transcription is probably the slowest step. GPU use is untested.
+   The timing logs show it is the biggest step: "listen" is about 11 to 37 s of 30 to 61 s per
+   reel. GPU use is untested.
 3. **OCR is noisy** (see "On-screen text" in notes). Frame sampling every 2 s is a blunt
-   tool; duplicate frames and low-quality text are common.
+   tool; duplicate frames and low-quality text are common. It is not slow: 2 to 9 s per reel.
 4. **Regex-based promo/offer filter** (`LOW_PRIORITY_RE`) is fragile and English-only.
 5. **No database/index.** `/search`, chat retrieval (`relevant_notes`) and stats scan
    every file each time. Retrieval is keyword-based, not semantic (no embeddings),
@@ -191,22 +202,76 @@ These are the real pain points and honest gaps. Good places to start.
 7. **Single process, single user, PC must be on.** No queue: two long jobs at once can
    slow the PC. If the PC is off, nothing runs; missed reminders and scheduled messages are sent when it
    is back (a missed daily nudge only on the same day).
-8. **Instagram/Facebook changes break yt-dlp** often; cookies are needed sometimes.
+8. **Instagram/Facebook changes break yt-dlp** often; cookies are needed sometimes. **Threads**
+   gave no video from its public page in a real test (login wall or empty page).
 9. **Resources for non-code topics** are only Google search links (no real verification).
 10. **Security:** the bot token and cookies are local files; bot trusts `ALLOWED_USER_ID`
     only. No rate limiting; prompt-injection through video text into the notes/chat
     prompt is not specifically handled.
-11. Several large functions in `processor.py` (1770 lines) and `bot.py` (1280 lines);
+11. Several large functions in `processor.py` (about 2500 lines) and `bot.py` (about 1600 lines);
     one file per layer is getting big.
+12. **"High" priority means little:** in a real list, about half of the open actions were 🔥. The AI
+    marks too many. "Pick 3 for this week" (section 10) is the planned fix.
 
-## 10. Backlog (already agreed, with effort)
+## 10. Feature to-do list (updated 2026-11-21)
 
-Small: skip junk resources that are file names (.xlsx), "Done" with a learning note,
-`/addnote`, Obsidian export, `/health` in the weekly review, backup zip before
-`/renametag` `/retag`.
-Medium: voice notes, stats dashboard, projects, merge duplicates, web articles / X posts,
-quiz from notes, topic summary.
-Big: always-on hosting (VPS/Raspberry Pi) while staying free/private.
+How it is ranked: does it help the user DO the actions that were saved? Real numbers from the
+bot on 2026-11-21: about 105 reels saved in a month, 2 actions done, 110 open actions. Of the
+open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (🧠).
+
+### Done
+
+- **Capture:** Instagram, Facebook, YouTube Shorts, TikTok, X (video posts), screenshots, a video
+  file. Threads: coded, but a real test gave no video (see section 9), so it is not reliable.
+- **Do-features:** one action per reel, action types (🤖 🧠 🔗), `/cleanup` and `/undocleanup`,
+  "save one, do one" after a new note, a nudge with the link and key points, 🤖 Get prompt
+  (`/prompt`), "What did you learn?" after a Done (shown in `/month`), habit and action merged into
+  one to-do, `/redo fast` (rebuild a note from its saved text, no download), stable `/todo` numbers, catch-up of missed messages when the PC starts.
+- **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when Google Drive
+  is missing (and moved back later), search that keeps short words (ai, uv), `/usage`, rules and
+  hooks for Claude Code (`CLAUDE.md`, `.claude/`).
+
+### To do, in the order I suggest
+
+| # | Feature | Effort | Why |
+|---|---|---|---|
+| 1 | **Pick 3 for this week.** The Sunday review shows your top actions as buttons. Tap up to 3. The nudge uses only those. | 🟡 | Half of the open actions are 🔥, so priority is not a plan. Three is a plan. |
+| 2 | **Keep or drop after 3 nudges.** Count the nudges per action. After 3 with no Done, ask: Keep / Drop. | 🟢 | An action ignored 3 times will not be done by a 4th message. |
+| 3 | **`/review` old notes.** One old note at a time with Keep / Drop buttons. | 🟡 | You choose your list, 5 notes per round. |
+| 4 | **Bring back an "Other idea".** `/note` shows a button to move an idea into the to-do list. | 🟢 | Extra ideas are plain bullets. You cannot bring one back from Telegram. |
+| 5 | **7-day habit check** for 🧠 actions. | 🟡 | 32 of the 110 open actions are habits. A habit is not a one-time tick. |
+| 6 | **`/tools` list.** All tools and repos from all notes, with the number of notes that mention each. | 🟢 | A tool in 4 reels is a strong sign to try it first. |
+| 7 | **"You already saved this topic".** One line under a new note when older notes share 2 or more tags. | 🟢 | Saving the same idea again and again is a hint to act on it. |
+| 8 | **Topic cheat sheet** (`/topic claude`). Merge the key points of one tag into one page. | 🟡 | Ten small notes become one page. Limit to 8 notes and show the sources. |
+| 9 | **`/add`.** Add your own action. | 🟢 | One list for everything. Low rank: your problem is doing, not adding. |
+
+### Small fixes and checks
+
+- `/month`: show the action next to each learning (today it shows only the learning). 🟢
+- README: say that Threads video may not work. 🟢
+- Speed: "listen" (Whisper on the CPU) is the biggest step, about 11 to 37 s of 30 to 61 s per reel.
+  OCR is only 2 to 9 s. Test Whisper on the GPU (`WHISPER_DEVICE` with a fallback to CPU).
+  It shares the 8 GB with Ollama, so measure first. 🟡
+- After 2 weeks of `/usage`: hide the commands nobody uses. Candidates: `/ask` (chat does the same),
+  `/high` `/normal` `/low`, `/tags`, `/retag`, `/renametag`, `/file`, `/update`. Decide from the counts.
+- Skip junk resources that are file names (.xlsx). 🟢
+- Show `/health` in the weekly review. 🟢
+- Backup copy before `/renametag` and `/retag`. 🟢
+- Check: send one Facebook share link again. The failure on 2026-11-19 was the missing Google Drive,
+  not Facebook.
+- Check: paste the BotFather list (`botfather-commands.txt`) into BotFather when commands are added.
+
+### Later (after the do-features)
+
+Voice note to action, web articles, quiz from notes, projects (group actions under one goal).
+These add more things to save or are about remembering. They do not fix "I do not act".
+
+### Not now
+
+- Always-on hosting: against the rules (free, local, the PC is not always on).
+- Threads video: the public page gives no video without a login. Use the file fallback.
+- Obsidian export and a stats dashboard: Telegram is the only screen.
+- Anything that needs an Instagram or Facebook login or cookies.
 
 ## 11. How to run and test
 
@@ -214,7 +279,7 @@ Big: always-on hosting (VPS/Raspberry Pi) while staying free/private.
 python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt
 copy .env.example .env      # fill in token and ALLOWED_USER_ID
 python bot.py               # or run tray.py
-pip install -r requirements-dev.txt ; python -m pytest      # 262 tests, no network needed
+pip install -r requirements-dev.txt ; python -m pytest      # 432 tests, no network needed
 ```
 
 Tests use stubs for `pytesseract` and `faster_whisper`; Ollama and GitHub calls are

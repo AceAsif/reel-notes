@@ -115,7 +115,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
         "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
-        "Fix: /redo (make the newest note again)  /health  /update\n\n"
+        "Fix: /redo (make the newest note again)  /redo fast 2 (from the saved text, no download)  "
+        "/health  /update\n\n"
         "Or just talk to me! Ask anything about your notes, e.g. \"what did I save about Claude?\" (/newchat starts over)\n\n"
         "Every morning I'll send one action to do, and every Sunday a weekly review."
     )
@@ -291,10 +292,13 @@ async def note_from_link(status, url: str) -> Path | None:
 # ---- /redo ------------------------------------------------------------------
 
 async def redo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/redo = make your newest note again. /redo 2 (after /notes) or /redo llm wiki."""
+    """/redo = make your newest note again. /redo 2 (after /notes) or /redo llm wiki.
+    /redo fast ... = the same, but from the text saved in the note (no download)."""
     if not is_allowed(update):
         return
-    args = " ".join(context.args or []).strip()
+    words = list(context.args or [])
+    fast = bool(words) and words[0].lower() == "fast"
+    args = " ".join(words[1:] if fast else words).strip()
     path = None
     if args.isdigit():
         paths = context.user_data.get("last_results", [])
@@ -308,14 +312,31 @@ async def redo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "I couldn't find that note. Try /redo (newest note), /redo llm wiki, "
             "or /notes then /redo 2")
         return
+    title = path.read_text(encoding="utf-8").split("\n", 1)[0].lstrip("# ")
+    if fast:
+        if processor.saved_inputs(path) is None:
+            await update.message.reply_text(processor.MSG_NO_SAVED_TEXT)
+            return
+        context.user_data["redo_path"] = str(path)
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⚡ Yes, redo it", callback_data="redo:fast"),
+            InlineKeyboardButton("Cancel", callback_data="redo:no")]])
+        await update.message.reply_text(
+            f"Make this note again from its saved text with {processor.OLLAMA_MODEL}? "
+            f"No download, so it is fast.\n\n📝 {title}\n\n"
+            "The old note moves to the “old” folder (not deleted). It keeps its date and tags. "
+            "Done and skipped actions and your learnings are kept. "
+            "Open actions are made new by the AI (their due dates and reminders are not kept).",
+            reply_markup=buttons)
+        return
     source = processor.note_source(path)
     if not re.search(LINK_PATTERN, source):
         await update.message.reply_text(
             f"“{path.name}” wasn't made from a link, so I can't download it again. "
-            "Send the video or screenshots again instead.")
+            "Send the video or screenshots again instead, or use /redo fast to make it "
+            "again from the text saved in the note.")
         return
     context.user_data["redo_path"] = str(path)
-    title = path.read_text(encoding="utf-8").split("\n", 1)[0].lstrip("# ")
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Yes, redo it", callback_data="redo:yes"),
                                      InlineKeyboardButton("Cancel", callback_data="redo:no")]])
     await update.message.reply_text(
@@ -330,11 +351,23 @@ async def redo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_allowed(update):
         return
     path = Path(context.user_data.pop("redo_path", "") or ".")
-    if query.data != "redo:yes":
+    if query.data not in ("redo:yes", "redo:fast"):
         await query.edit_message_text("OK, kept the note as it is.")
         return
     if not path.is_file():
         await query.edit_message_text("That note is gone. Run /redo again.")
+        return
+    if query.data == "redo:fast":
+        await query.edit_message_text("⚡ Making the note again from its saved text ⏳ (no download)")
+        try:
+            new_path, data = await asyncio.to_thread(processor.redo_from_saved, path)
+        except processor.RedoNotPossible as exc:
+            await query.edit_message_text(str(exc))
+            return
+        except Exception as exc:
+            await query.edit_message_text(f"❌ Something went wrong: {exc}\nThe old note was not changed.")
+            return
+        await send_note_reply(query.message, data, new_path)
         return
     url = processor.note_source(path)
     await query.edit_message_text("🔁 Making the note again ⏳ Downloading...")
