@@ -126,6 +126,10 @@ reminders still work (`legacy_action_id`).
   from the note(s) only (no AI call, nothing invented).
 - **Ops:** `/redo` (rebuild a note, old one moved to `old/`), `/health`, `/update`
   (yt-dlp), nightly yt-dlp auto-update.
+  `/redo fast` (`redo_from_saved`): rebuilds from the note's own `## Transcript`, `## On-screen text`
+  (fenced) and `## Post caption` (`saved_inputs`), so only the AI runs. Keeps the date and tags;
+  done/skipped lines and learnings are copied over (`carry_over`); a new action that is the same idea
+  as a finished one is not opened again. Never overwrites another note (`keep_existing`).
 - **New note:** one main action (`split_actions`: best priority first). Extra actions go to
   `## Other ideas` (plain bullets). "Comment X / DM me" offers are not actions: they go to
   `## From the creator`. No buttons (the A/B/C pick buttons were removed in batch 3).
@@ -222,7 +226,7 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
 - **Do-features:** one action per reel, action types (🤖 🧠 🔗), `/cleanup` and `/undocleanup`,
   "save one, do one" after a new note, a nudge with the link and key points, 🤖 Get prompt
   (`/prompt`), "What did you learn?" after a Done (shown in `/month`), habit and action merged into
-  one to-do, stable `/todo` numbers, catch-up of missed messages when the PC starts.
+  one to-do, `/redo fast` (rebuild a note from its saved text, no download), stable `/todo` numbers, catch-up of missed messages when the PC starts.
 - **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when Google Drive
   is missing (and moved back later), search that keeps short words (ai, uv), `/usage`, rules and
   hooks for Claude Code (`CLAUDE.md`, `.claude/`).
@@ -236,11 +240,10 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
 | 3 | **`/review` old notes.** One old note at a time with Keep / Drop buttons. | 🟡 | You choose your list, 5 notes per round. |
 | 4 | **Bring back an "Other idea".** `/note` shows a button to move an idea into the to-do list. | 🟢 | Extra ideas are plain bullets. You cannot bring one back from Telegram. |
 | 5 | **7-day habit check** for 🧠 actions. | 🟡 | 32 of the 110 open actions are habits. A habit is not a one-time tick. |
-| 6 | **Fast redo from saved text.** `/redo fast N` builds the note again from its saved transcript, with no download. | 🟡 | Old notes get the new format. Also a fast way to test models. |
-| 7 | **`/tools` list.** All tools and repos from all notes, with the number of notes that mention each. | 🟢 | A tool in 4 reels is a strong sign to try it first. |
-| 8 | **"You already saved this topic".** One line under a new note when older notes share 2 or more tags. | 🟢 | Saving the same idea again and again is a hint to act on it. |
-| 9 | **Topic cheat sheet** (`/topic claude`). Merge the key points of one tag into one page. | 🟡 | Ten small notes become one page. Limit to 8 notes and show the sources. |
-| 10 | **`/add`.** Add your own action. | 🟢 | One list for everything. Low rank: your problem is doing, not adding. |
+| 6 | **`/tools` list.** All tools and repos from all notes, with the number of notes that mention each. | 🟢 | A tool in 4 reels is a strong sign to try it first. |
+| 7 | **"You already saved this topic".** One line under a new note when older notes share 2 or more tags. | 🟢 | Saving the same idea again and again is a hint to act on it. |
+| 8 | **Topic cheat sheet** (`/topic claude`). Merge the key points of one tag into one page. | 🟡 | Ten small notes become one page. Limit to 8 notes and show the sources. |
+| 9 | **`/add`.** Add your own action. | 🟢 | One list for everything. Low rank: your problem is doing, not adding. |
 
 ### Small fixes and checks
 
