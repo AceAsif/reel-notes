@@ -1306,19 +1306,30 @@ def _log_notes(detail: str) -> None:
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] notes: {detail}", flush=True)
 
 
+def _free_name(folder: Path, name: str) -> Path:
+    """`folder / name`, or `name_2.md`, `name_3.md`... if that file is already there."""
+    path = folder / name
+    n = 2
+    while path.exists():
+        path = folder / f"{Path(name).stem}_{n}{Path(name).suffix}"
+        n += 1
+    return path
+
+
 def write_note_file(name: str, text: str) -> Path:
     """Write a note into the notes folder. If that folder can't be used, write it into
-    the pending folder on this PC instead (and say so in bot.log). Returns the file."""
+    the pending folder on this PC instead (and say so in bot.log). Returns the file.
+    An older note with the same name is never overwritten (the new one gets _2, _3...)."""
     try:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
-        path = NOTES_DIR / name
+        path = _free_name(NOTES_DIR, name)
         path.write_text(text, encoding="utf-8")
         return path
     except OSError as exc:
         PENDING_DIR.mkdir(parents=True, exist_ok=True)
-        path = PENDING_DIR / name
+        path = _free_name(PENDING_DIR, name)
         path.write_text(text, encoding="utf-8")
-        _log_notes(f"notes folder not available ({exc!r}). Saved {name} in {PENDING_DIR} for now")
+        _log_notes(f"notes folder not available ({exc!r}). Saved {path.name} in {PENDING_DIR} for now")
         return path
 
 
@@ -1340,11 +1351,7 @@ def sync_pending() -> int:
         return 0
     moved = 0
     for source in waiting:
-        target = NOTES_DIR / source.name
-        n = 2
-        while target.exists():
-            target = NOTES_DIR / f"{source.stem}_{n}{source.suffix}"
-            n += 1
+        target = _free_name(NOTES_DIR, source.name)
         try:
             shutil.copy2(source, target)
             if target.stat().st_size != source.stat().st_size:
