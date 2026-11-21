@@ -765,9 +765,9 @@ def slugify(text: str) -> str:
 
 def save_note(data: dict, transcript: str, screen: str, source: str,
               language: str = "en", caption: str = "", saved_at: datetime | None = None,
-              keep_existing: bool = False) -> Path:
+              keep_existing: bool = True) -> Path:
     """Write the note. `saved_at` keeps an older date (used by /redo fast).
-    `keep_existing=True` never overwrites a note that has the same file name."""
+    A note with the same file name is never overwritten (the new one gets _2, _3...)."""
     now = saved_at or datetime.now()
     name = f"{now:%Y-%m-%d_%H%M}_{slugify(data['title'])}.md"
 
@@ -1310,7 +1310,7 @@ def _log_notes(detail: str) -> None:
 
 
 def _free_name(folder: Path, name: str) -> Path:
-    """folder/name, or folder/name_2.md, _3... if that file already exists."""
+    """`folder / name`, or `name_2.md`, `name_3.md`... if that file is already there."""
     path, n = folder / name, 2
     while path.exists():
         path = folder / f"{Path(name).stem}_{n}.md"
@@ -1318,10 +1318,11 @@ def _free_name(folder: Path, name: str) -> Path:
     return path
 
 
-def write_note_file(name: str, text: str, keep_existing: bool = False) -> Path:
+def write_note_file(name: str, text: str, keep_existing: bool = True) -> Path:
     """Write a note into the notes folder. If that folder can't be used, write it into
     the pending folder on this PC instead (and say so in bot.log). Returns the file.
-    With keep_existing=True a note with the same name is never overwritten."""
+    An older note with the same name is never overwritten (the new one gets _2, _3...).
+    Only keep_existing=False replaces it."""
     try:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(NOTES_DIR, name) if keep_existing else NOTES_DIR / name
@@ -1331,7 +1332,7 @@ def write_note_file(name: str, text: str, keep_existing: bool = False) -> Path:
         PENDING_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(PENDING_DIR, name) if keep_existing else PENDING_DIR / name
         path.write_text(text, encoding="utf-8")
-        _log_notes(f"notes folder not available ({exc!r}). Saved {name} in {PENDING_DIR} for now")
+        _log_notes(f"notes folder not available ({exc!r}). Saved {path.name} in {PENDING_DIR} for now")
         return path
 
 
@@ -1353,11 +1354,7 @@ def sync_pending() -> int:
         return 0
     moved = 0
     for source in waiting:
-        target = NOTES_DIR / source.name
-        n = 2
-        while target.exists():
-            target = NOTES_DIR / f"{source.stem}_{n}{source.suffix}"
-            n += 1
+        target = _free_name(NOTES_DIR, source.name)
         try:
             shutil.copy2(source, target)
             if target.stat().st_size != source.stat().st_size:

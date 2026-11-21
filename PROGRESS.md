@@ -1,31 +1,28 @@
-# Progress - /redo fast (make a note again from its saved text)
-Branch: feature/fast-redo (built on docs/feature-todo-update, which is not merged yet)
-Last updated: 2026-11-21
+# Progress - a new note never overwrites an older note
+Branch: claude/gallant-johnson-lxv95t
+Last updated: 2026-11-22
 
 ## Done
-- Step 1: `saved_inputs(path)` reads back what a note was made from: `## Transcript`, `## On-screen text`
-  (inside its code fence, so a "## " line in the OCR text is safe; older notes without a fence work too),
-  `## Post caption` (the last section, so a "## " line in the caption is safe), and the header: Source,
-  Creator, Language, Slides, Date, tags. "(no speech)" and "(none)" mean empty. None = nothing to work from.
-- Step 2: `redo_from_saved(path)`: runs only `summarise` (the AI). No download, no Whisper, no OCR. Keeps
-  the note's date (file name and "- Date:") and your tags. The old note moves to old/. If the AI fails the
-  old note is not touched; if saving fails it is put back. `save_note(..., keep_existing=True)` never
-  overwrites another note with the same name (it adds _2).
-- Step 3: `carry_over`: done and skipped lines (with their "Learned" line) go into the new note. A new open
-  action that is the same idea as one of them (`similar_idea`) is replaced by the old line, so it is not
-  opened again. The rest go to the end of "## Action items". Habits too.
-- Step 4: Telegram: `/redo fast`, `/redo fast 2`, `/redo fast <title words>`; a confirm button
-  (`redo:fast`); the reply shows the new note with "⏱ ... (AI ...)". Plain `/redo` on a screenshot note now
-  suggests `/redo fast`. /start text, BotFather list, README, HANDOVER (section 6 and the to-do list).
-- Step 5: 19 new tests (the download, Whisper and OCR functions fail if called). Tests: 451 passed.
+- Step 1: the bug. `save_note` names a file `YYYY-MM-DD_HHMM_<title>.md`. Two notes with the same title in
+  the same minute (two reels sent together, or the same topic twice) had the same name, and the second one
+  replaced the first. The first note and its actions were lost with no message.
+- Step 2: the fix. `save_note` and `write_note_file` now default to `keep_existing=True`: they use
+  `_free_name(folder, name)`, which gives `name.md`, or `name_2.md`, `name_3.md`... if the file is already
+  there. This works for the notes folder and for the pending folder. `sync_pending` uses the same helper.
+  `/redo` is not changed: it renames the old note to `.redo` first, so the new note gets the normal name.
+  `/redo fast` already passed `keep_existing=True`.
+- Step 3: tests. No old test depended on the overwrite. 2 new tests in tests/test_notes_fallback.py stop
+  the clock and save 3 (and 2) notes with the same title: all are kept, named `..._2.md`, `..._3.md`,
+  with their own source and actions. Both fail on the old code.
+- Step 4: merged main (with /redo fast) into this branch and fixed the conflicts in processor.py.
 
 ## Next step
-- Owner: merge docs/feature-todo-update first (this branch is built on it), then this one.
-- Try `/redo fast` on one old note. Check: same date, your tags, done actions still done.
+- Owner: merge the pull request. Pull, restart. Send two reels about the same thing at the same time.
+  Both notes should be there.
 
 ## Decisions
-- Open actions are made new by the AI; their due dates and reminders are not carried over (said in the
-  confirm message). Done and skipped history is always kept, so /cleanup work is not undone.
-- One note at a time. A "/redo fast all" for every old note is possible later (about 15-25 s per note).
-- Found, not fixed here: a normal new note overwrites another note with the same file name (same minute,
-  same title). /redo fast avoids it with `keep_existing`.
+- `keep_existing` stays (main uses it), but `True` is now the default. Nothing in the code passes `False`.
+- A name is checked, then written. Two saves in the same split second could still clash. That is very
+  unlikely for one person, and the fallback test fakes a broken folder through `Path.write_text`, so the
+  write stays a plain `write_text`.
+- graphify has no graph and no `graphify` command in this environment, so its rules could not be followed here.

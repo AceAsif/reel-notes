@@ -57,6 +57,35 @@ def test_note_goes_to_the_notes_folder_when_it_works(drive):
     assert path.parent == drive and not p.is_pending(path) and p.pending_notes() == []
 
 
+class _FixedTime(p.datetime):
+    """The clock stops, so two notes are surely saved in the same minute."""
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 1, 2, 9, 30, 15)
+
+
+def test_two_notes_with_the_same_title_in_the_same_minute_are_both_kept(drive, monkeypatch):
+    monkeypatch.setattr(p, "datetime", _FixedTime)
+    first, _ = note(source="https://x/1")
+    second, _ = note(source="https://x/2")
+    third, _ = note(source="https://x/3")
+    assert first.name == "2026-01-02_0930_tool-tips.md"
+    assert second.name == "2026-01-02_0930_tool-tips_2.md"
+    assert third.name == "2026-01-02_0930_tool-tips_3.md"
+    assert sorted(drive.glob("*.md")) == [first, second, third]
+    assert [p.note_source(f) for f in (first, second, third)] == ["https://x/1", "https://x/2", "https://x/3"]
+    assert len(p.open_actions()) == 3                               # no action is lost
+
+
+def test_same_title_in_the_same_minute_is_also_kept_in_the_pending_folder(gone, monkeypatch):
+    monkeypatch.setattr(p, "datetime", _FixedTime)
+    first, _ = note(source="https://x/1")
+    second, _ = note(source="https://x/2")
+    assert second.name == "2026-01-02_0930_tool-tips_2.md"
+    assert p.pending_notes() == [first, second]
+    assert [p.note_source(f) for f in (first, second)] == ["https://x/1", "https://x/2"]
+
+
 def test_a_folder_that_exists_but_cannot_be_written_also_falls_back(drive, monkeypatch):
     real = Path.write_text
 
