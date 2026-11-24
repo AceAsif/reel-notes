@@ -1,4 +1,10 @@
-"""PreToolUse hook: checks before Claude Code runs `git commit`.
+"""PreToolUse hook for Bash: blocks dangerous commands, and checks before `git commit`.
+
+Any command is blocked (exit code 2, reason on stderr) when it:
+  a. deletes by force and recursively: `rm -rf`, `rm -r -f`, `Remove-Item -Recurse -Force`, `rd /s`,
+  b. names a private file: .env, .env.local, cookies.txt, bot.log, the *.json state files, notes/.
+     (A second guard next to the deny rules in settings.json: those only match some commands.)
+An allowed command gets exit code 0 and no output, so the normal permission rules still apply.
 
 It blocks the commit (exit code 2) when:
   1. the commit command has a `Co-Authored-By` or `Claude-Session` line (project rule),
@@ -29,6 +35,51 @@ SECRET_RES = {
     "a GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
 }
 MAX_FILE_BYTES = 1_000_000
+
+# a private file named anywhere in a command (".env.example" is fine: it has no secrets)
+PRIVATE_IN_COMMAND_RE = re.compile(
+    r"(?<![\w.-])(?:\.env(?:\.local)?|cookies\.txt|bot\.log|reminders\.json|sent_jobs\.json"
+    r"|bot_state\.json|cleanup_undo\.json)(?![\w.-])|(?<![\w.-])notes[/\\]", re.I)
+SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]+|\$\(|`")
+PREFIX_WORDS = {"sudo", "command", "builtin", "exec", "nohup", "time", "xargs", "env"}
+
+
+def is_force_delete(command: str) -> bool:
+    """True for rm -rf (any flag order), PowerShell Remove-Item -Recurse -Force, cmd rd /s."""
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        words = [w.strip("'\"(){}") for w in segment.split()]
+        while words and (words[0] in PREFIX_WORDS or "=" in words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        name = words[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        rest = [w.lower() for w in words[1:]]
+        short = "".join(w[1:] for w in words[1:] if w.startswith("-") and not w.startswith("--"))
+        if name == "rm":
+            recursive = "r" in short.lower() or "--recursive" in rest
+            force = "f" in short or "--force" in rest
+            if recursive and force:
+                return True
+        if name in ("remove-item", "ri", "rm", "del", "rmdir", "rd", "erase"):
+            if any(w.startswith("-r") and "recurse".startswith(w[1:]) for w in rest) and \
+                    any(w.startswith("-fo") and "force".startswith(w[1:]) for w in rest):
+                return True                             # PowerShell, any short form
+        if name in ("rd", "rmdir") and "/s" in rest:
+            return True                                 # cmd.exe
+    return False
+
+
+def danger_in(command: str) -> list[str]:
+    """Reasons to block any Bash command, commit or not. [] = let it run."""
+    problems = []
+    if is_force_delete(command):
+        problems.append("force delete (rm -rf or the same) is not allowed. Delete one file you have "
+                        "looked at, or ask the owner.")
+    found = PRIVATE_IN_COMMAND_RE.search(command)
+    if found:
+        problems.append(f"the command names a private file ({found.group(0)}). Project rule: never "
+                        "read, print or commit private files.")
+    return problems
 
 
 def is_private(path: str) -> bool:
@@ -120,11 +171,15 @@ def main() -> int:
         command = str((data.get("tool_input") or {}).get("command", ""))
     except (ValueError, AttributeError):
         return 0                                        # not our kind of input: do not block
+    danger = danger_in(command)
+    if danger:
+        print("Command blocked:\n- " + "\n- ".join(danger), file=sys.stderr)
+        return 2                                        # exit code 2 = block, text goes to Claude
     problems = problems_for(command)
     if problems:
         print("Commit blocked:\n- " + "\n- ".join(problems), file=sys.stderr)
-        return 2                                        # exit code 2 = block, text goes to Claude
-    return 0
+        return 2
+    return 0                                            # allowed: no output, normal rules apply
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "graphify hook-guard compact",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify_guard.py\" compact",
             "timeout": 10
           }
         ]
@@ -107,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "graphify hook-guard search --strict",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify_guard.py\" search --strict",
             "timeout": 10
           }
         ]
@@ -117,7 +117,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "graphify hook-guard read --strict",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify_guard.py\" read --strict",
             "timeout": 10
           }
         ]

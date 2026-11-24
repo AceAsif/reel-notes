@@ -15,8 +15,12 @@ items, and helps the user DO the actions. Read `docs/HANDOVER.md` first, then `R
 - Run `python -m pytest -q` after each step and before each commit. All tests must pass.
   The tests need no network.
 - A hook (`.claude/hooks/pre_commit_check.py`) blocks `git commit` when a test fails, a
-  private file is staged, a token is found, or the message has a trailer line. Fix the
-  problem it names. Do not work around it.
+  private file is staged, a token is found, or the message has a trailer line. It also blocks
+  any Bash command that force-deletes (`rm -rf`) or names a private file. Fix the problem it
+  names. Do not work around it.
+- graphify hooks run through `.claude/hooks/graphify_guard.py`, so they do nothing when
+  graphify is not installed. If `graphify install` puts bare `graphify hook-guard` lines back
+  in `.claude/settings.json`, change them back to the wrapper.
 - Always say which folder each file goes in, and suggest a commit message.
 - Do not write code when only ideas or a review are asked for.
 
