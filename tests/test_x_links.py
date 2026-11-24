@@ -134,30 +134,37 @@ def crashes(opts, url):
     raise ConnectionResetError("connection reset")
 
 
-@pytest.mark.parametrize("behave,reason", [
-    (raises_download_error, "No video could be found"),
-    (returns_nothing_and_logs, "Sign in to confirm your age"),
-    (returns_nothing_quietly, "Nothing could be downloaded"),
-    (crashes, "ConnectionResetError"),
+@pytest.mark.parametrize("behave,reason,shown", [
+    (raises_download_error, "No video could be found", "[twitter] 1234567890: No video could be found"),
+    (returns_nothing_and_logs, "Sign in to confirm your age", "[twitter] 1234567890: Sign in to confirm"),
+    (returns_nothing_quietly, "Nothing could be downloaded", "Nothing could be downloaded"),
+    (crashes, "ConnectionResetError", "connection reset"),
 ], ids=["download-error", "error-logged-by-yt-dlp", "nothing-downloaded", "network-crash"])
-def test_failure_gives_the_exact_reply_and_logs_the_real_error(tmp_path, monkeypatch, capsys, behave, reason):
+def test_failure_gives_the_exact_reply_and_logs_the_real_error(tmp_path, monkeypatch, capsys, behave, reason,
+                                                               shown):
     fake_ytdlp(monkeypatch, behave)
     with pytest.raises(processor.VideoNotSaved) as err:
         processor.download_media(TWEET + "?s=20&t=private-looking-token", tmp_path)
-    assert str(err.value) == EXACT
+    first, second = str(err.value).split("\n")
+    assert first == EXACT                                       # the X sentence is unchanged
+    assert second.startswith("Reason: " + shown)               # yt-dlp's real reason, cleaned
+    assert "ERROR:" not in second and "private-looking-token" not in second and "http" not in second
     log = capsys.readouterr().out
     assert " x: yt-dlp failed:" in log and reason in log
     assert "private-looking-token" not in log and "https://x.com/ann/status/1234567890" in log
 
 
-def test_other_sites_keep_their_old_errors(tmp_path, monkeypatch):
+def test_other_sites_now_show_the_real_error_too(tmp_path, monkeypatch, capsys):
     fake_ytdlp(monkeypatch, raises_download_error)
-    with pytest.raises(yt_dlp.utils.DownloadError):               # not turned into the X message
+    with pytest.raises(processor.VideoNotSaved) as err:
         processor.download_media("https://www.instagram.com/reel/ABC/", tmp_path)
-    fake_ytdlp(monkeypatch, returns_nothing_quietly)
-    with pytest.raises(RuntimeError, match="Nothing could be downloaded") as err:
+    text = str(err.value)
+    assert text.startswith(processor.MSG_DOWNLOAD_FAILED) and EXACT not in text   # not the X message
+    assert "Reason: [twitter] 1234567890: No video could be found in this tweet" in text
+    assert " download: yt-dlp failed:" in capsys.readouterr().out
+    fake_ytdlp(monkeypatch, returns_nothing_quietly)                # nothing and no error: say so
+    with pytest.raises(processor.VideoNotSaved, match="Nothing could be downloaded"):
         processor.download_media("https://www.tiktok.com/@a/video/1", tmp_path)
-    assert not isinstance(err.value, processor.VideoNotSaved)
 
 
 def test_error_logger_is_quiet_and_remembers_errors():

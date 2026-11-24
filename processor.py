@@ -842,6 +842,37 @@ def is_x_url(url: str) -> bool:
     return bool(X_URL_RE.match((url or "").strip()))
 
 
+MSG_DOWNLOAD_FAILED = "❌ I could not download this video."
+MSG_DOWNLOAD_TRY = "Try /update (a new yt-dlp often fixes it), or send me the video file."
+YTDLP_ERROR_LIMIT = 300
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
+_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|~/|(?<![\w.:-])/(?=[^\s/]+/))[^\s'\"]*")
+_SECRET_RE = re.compile(r"cookie|password|passwd|netrc|credential|token", re.I)
+
+
+def clean_ytdlp_error(text: str, limit: int = YTDLP_ERROR_LIMIT) -> str:
+    """yt-dlp's error, safe and short for a chat message: no colour codes, no "ERROR:",
+    no links, no file paths, no sentence about cookies, logins or tokens. About `limit` chars."""
+    text = _ANSI_RE.sub("", str(text or ""))
+    text = re.sub(r"^\s*(?:(?:ERROR|WARNING)\s*:\s*)+", "", text, flags=re.I)
+    text = _URL_RE.sub("[link]", text)
+    text = _PATH_RE.sub("[file]", text)
+    sentences = re.split(r"(?<=[.!?])\s+", " ".join(text.split()))
+    text = " ".join(x for x in sentences if not _SECRET_RE.search(x)).strip()
+    if len(text) > limit:
+        text = text[:limit - 1].rstrip() + "…"
+    return text or "unknown error"
+
+
+def download_failed_text(reason: str, x_link: bool = False) -> str:
+    """The chat message when yt-dlp could not get a video, with yt-dlp's own reason."""
+    head = MSG_X_NO_VIDEO if x_link else MSG_DOWNLOAD_FAILED
+    tail = "" if x_link else "\n\n" + MSG_DOWNLOAD_TRY
+    return f"{head}\nReason: {clean_ytdlp_error(reason)}{tail}"
+
+
 class YtdlpErrors:
     """A yt-dlp logger that only remembers the error lines, so they can go to bot.log."""
     def __init__(self) -> None:
@@ -887,8 +918,7 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
     }
     x_link = is_x_url(url)
     seen = YtdlpErrors()
-    if x_link:
-        opts["logger"] = seen           # keep yt-dlp's real error for bot.log
+    opts["logger"] = seen               # keep yt-dlp's real error for the chat and bot.log
     # Instagram often needs you logged in: export cookies to a cookies.txt file.
     # X links never get cookies (no login for X).
     if os.getenv("COOKIES_FILE") and not x_link:
@@ -905,12 +935,11 @@ def download_media(url: str, workdir: Path) -> tuple[list[Path], str, dict]:
                     break
         return pick_slides(workdir), caption.strip(), creator_from_info(info)
     except Exception as exc:
-        if not x_link:
-            raise
-        reason = " | ".join(seen.errors[-2:]) or repr(exc)       # yt-dlp's own words first
-        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] x: yt-dlp failed: {reason[:400]} | "
-              f"{url.split('?')[0]}", flush=True)
-        raise VideoNotSaved(MSG_X_NO_VIDEO) from exc
+        logged = " | ".join(seen.errors[-2:]) or repr(exc)       # yt-dlp's own words first
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {'x' if x_link else 'download'}: "
+              f"yt-dlp failed: {logged[:400]} | {url.split('?')[0]}", flush=True)
+        reason = seen.errors[-1] if seen.errors else (str(exc) or repr(exc))
+        raise VideoNotSaved(download_failed_text(reason, x_link)) from exc
 
 
 def creator_from_info(info: dict) -> dict:
