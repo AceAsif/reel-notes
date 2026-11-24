@@ -99,7 +99,9 @@ Send a link to a post on `x.com` or `twitter.com` (also `mobile.twitter.com`).
 - The bot uses **yt-dlp**, like for the other sites. A post with a video makes a note. A post with several videos makes one combined note.
 - **No login and no cookies.** The bot never sends your cookies file to X. So posts that need a login (age-limited or private posts) cannot be saved.
 - **Video posts only.** A post with only text or pictures cannot be saved from a link.
-- If the video cannot be saved, the bot replies: *I could not get this X video. Please save the video and send me the file.* Then send the video file to the bot as normal. The real reason (yt-dlp's own message) is written to `bot.log`: search for `x: yt-dlp failed`.
+- If the video cannot be saved, the bot replies: *I could not get this X video. Please save the video and send me the file.* and a short *Reason:* line with yt-dlp's own error. Then send the video file to the bot as normal. The full error is written to `bot.log`: search for `x: yt-dlp failed`.
+
+**When any link fails to download**, the bot shows yt-dlp's real error, for example *Reason: [youtube] abc: Private video*. The error is cleaned first: no colour codes, no `ERROR:`, no links, no file paths, no sentence about cookies, passwords or tokens, and at most about 300 characters. The full error is in `bot.log` (search for `yt-dlp failed`). A new yt-dlp often fixes it: send `/update`.
 - The same post on `x.com` and `twitter.com` counts as one note (the duplicate check).
 - Links that other sites make for X (for example `fixupx.com` or `vxtwitter.com`) are not accepted. Use the normal `x.com` link.
 - X changes often. If it stops working, update yt-dlp with `/update` and restart the bot.
