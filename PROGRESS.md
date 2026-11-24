@@ -1,28 +1,29 @@
-# Progress - a new note never overwrites an older note
-Branch: claude/gallant-johnson-lxv95t
-Last updated: 2026-11-22
+# Progress - fix "A hook gave no usable answer"
+Branch: fix/pretooluse-hook
+Last updated: 2026-11-24
 
 ## Done
-- Step 1: the bug. `save_note` names a file `YYYY-MM-DD_HHMM_<title>.md`. Two notes with the same title in
-  the same minute (two reels sent together, or the same topic twice) had the same name, and the second one
-  replaced the first. The first note and its actions were lost with no message.
-- Step 2: the fix. `save_note` and `write_note_file` now default to `keep_existing=True`: they use
-  `_free_name(folder, name)`, which gives `name.md`, or `name_2.md`, `name_3.md`... if the file is already
-  there. This works for the notes folder and for the pending folder. `sync_pending` uses the same helper.
-  `/redo` is not changed: it renames the old note to `.redo` first, so the new note gets the normal name.
-  `/redo fast` already passed `keep_existing=True`.
-- Step 3: tests. No old test depended on the overwrite. 2 new tests in tests/test_notes_fallback.py stop
-  the clock and save 3 (and 2) notes with the same title: all are kept, named `..._2.md`, `..._3.md`,
-  with their own source and actions. Both fail on the old code.
-- Step 4: merged main (with /redo fast) into this branch and fixed the conflicts in processor.py.
+- Step 1: the cause. `.claude/settings.json` ran `graphify hook-guard search --strict` (Bash, Grep) and
+  `graphify hook-guard read --strict` (Read, Glob) as bare commands. Where `graphify` is not on PATH the
+  shell exits 127 "command not found", which is not a valid hook answer, so Claude Code says "A hook gave
+  no usable answer" on every git status. `pre_commit_check.py` itself was fine (exit 0, no output).
+- Step 2: new `.claude/hooks/graphify_guard.py`. All 3 graphify hooks (also SessionStart compact) now run
+  `python "$CLAUDE_PROJECT_DIR/.claude/hooks/graphify_guard.py" <args>`. It always gives a valid answer:
+  graphify missing, crashing or slow = exit 0 and no output; graphify block (exit 2) = still a block;
+  graphify JSON = passed on, but an "allow" is removed (it would skip the deny rules); plain text =
+  valid JSON `additionalContext`. Plain Python: Windows and Linux.
+- Step 3: `pre_commit_check.py` now also blocks any Bash command that force-deletes (`rm -rf` in any flag
+  order, PowerShell `Remove-Item -Recurse -Force`, cmd `rd /s`) or names a private file (.env, cookies.txt,
+  bot.log, the JSON state files, notes/). `.env.example` is allowed. Allowed commands: exit 0, no output.
+  No deny rule in settings.json was changed (a test checks all 66).
+- Step 4: 57 new tests in tests/test_hooks.py. Tests: 510 passed. CLAUDE.md updated.
 
 ## Next step
-- Owner: merge the pull request. Pull, restart. Send two reels about the same thing at the same time.
-  Both notes should be there.
+- Owner: merge, then restart Claude Code on the PC. Run `git status`: no hook warning.
+- If you run `graphify install` again, check that settings.json still uses graphify_guard.py.
 
 ## Decisions
-- `keep_existing` stays (main uses it), but `True` is now the default. Nothing in the code passes `False`.
-- A name is checked, then written. Two saves in the same split second could still clash. That is very
-  unlikely for one person, and the fallback test fakes a broken folder through `Path.write_text`, so the
-  write stays a plain `write_text`.
-- graphify has no graph and no `graphify` command in this environment, so its rules could not be followed here.
+- I could not install graphify here, so I could not see what `graphify hook-guard` prints on the PC.
+  The wrapper handles every case (missing, error, block, JSON, text), and tests use a fake graphify.
+- The new private-file check blocks a command that only mentions a private file too (for example in a
+  commit message). That is on purpose: it is the safe side.
