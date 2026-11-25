@@ -227,16 +227,39 @@ LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
                 r"(?<![\w-])threads\.(?:com|net)|(?<![\w-])(?:x|twitter)\.com)\S*")
 
 
-async def already_saved(msg, url: str) -> bool:
-    """Reply and return True if this reel already has a note."""
+async def already_saved(msg, url: str, context=None) -> bool:
+    """Reply and return True if this reel already has a note.
+    With context (a pasted link), offer a "Save again" button."""
     existing = processor.find_note_by_source(url)
-    if existing:
+    if not existing:
+        return False
+    if context is None:                           # video or screenshots: the file can't be kept
         await msg.reply_text(
             f"📌 Already saved: {existing.name}\n"
-            "To make a fresh note, delete that file from the notes folder and send it again."
-        )
+            "To make a fresh note, delete that file from the notes folder and send it again.")
         return True
-    return False
+    context.user_data["save_again_url"] = url     # a URL can be longer than callback_data allows
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("💾 Save again", callback_data="again:yes"),
+                                     InlineKeyboardButton("Cancel", callback_data="again:no")]])
+    await msg.reply_text(f"📌 Already saved: {existing.name}\n"
+                         "Press Save again to make a new note anyway.", reply_markup=buttons)
+    return True
+
+
+async def save_again_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    url = context.user_data.pop("save_again_url", "")
+    if query.data != "again:yes":
+        await query.edit_message_text("OK, kept the old note. Nothing downloaded.")
+        return
+    if not url:
+        await query.edit_message_text("I lost that link. Send it again.")
+        return
+    await query.edit_message_text("Got the link ⏳ Downloading...")
+    await note_from_link(query.message, url)
 
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -245,7 +268,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     msg = update.message
     url = re.search(LINK_PATTERN, msg.text).group(0)
-    if await already_saved(msg, url):
+    if await already_saved(msg, url, context):
         return
 
     status = await msg.reply_text("Got the link ⏳ Downloading...")
@@ -1625,6 +1648,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("redo", redo))
     app.add_handler(CommandHandler("due", due))
     app.add_handler(CallbackQueryHandler(redo_button_pressed, pattern=r"^redo:"))
+    app.add_handler(CallbackQueryHandler(save_again_pressed, pattern=r"^again:"))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("file", send_file))

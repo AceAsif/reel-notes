@@ -35,7 +35,7 @@ Reel video ───────────────────────
 
 | Command | What it does |
 |---|---|
-| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok, Threads and X (video posts only, see below) |
+| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok, Threads and X (video posts only, see below). If the link already has a note, the bot says "Already saved" and shows a Save again button |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |

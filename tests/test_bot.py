@@ -739,3 +739,63 @@ def test_count_use_counts_the_name_only(monkeypatch):
     assert "secret" not in str(bot.processor.load_state())
     assert "1× /ask" in bot.processor.usage_text()
     assert first_matching_handler("/usage") is not None
+
+
+# ---- "Already saved" warning with a Save again button ------------------------------
+
+def run_link(tmp_path, monkeypatch, url):
+    """Paste a link. Returns (replies, downloads, user_data)."""
+    monkeypatch.setattr(bot.processor, "NOTES_DIR", tmp_path)
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    (tmp_path / "2026-11-14_2106_x.md").write_text(
+        "# X\n- Source: https://www.instagram.com/reel/ABC/\n", encoding="utf-8")
+    downloads, replies = [], []
+    async def fake_link(status, u): downloads.append(u)
+    monkeypatch.setattr(bot, "note_from_link", fake_link)
+    async def reply(text, reply_markup=None):
+        replies.append((text, reply_markup))
+    msg = types.SimpleNamespace(text=url, reply_text=reply)
+    upd = types.SimpleNamespace(message=msg, effective_user=types.SimpleNamespace(id=1))
+    ctx = types.SimpleNamespace(user_data={})
+    asyncio.run(bot.handle_link(upd, ctx))
+    return replies, downloads, ctx.user_data
+
+
+def test_new_link_is_downloaded(tmp_path, monkeypatch):
+    replies, downloads, _ = run_link(tmp_path, monkeypatch, "https://www.instagram.com/reel/NEW/")
+    assert downloads == ["https://www.instagram.com/reel/NEW/"]
+    assert not any("Already saved" in t for t, _ in replies)
+
+
+@pytest.mark.parametrize("url", ["https://www.instagram.com/reel/ABC/",
+                                 "https://www.instagram.com/reel/ABC?igsh=zz9&utm_source=x"])
+def test_same_link_warns_with_save_again_button(tmp_path, monkeypatch, url):
+    replies, downloads, data = run_link(tmp_path, monkeypatch, url)
+    assert downloads == []                                  # nothing downloaded
+    text, markup = replies[0]
+    assert text.startswith("📌 Already saved: 2026-11-14_2106_x.md")
+    assert markup.inline_keyboard[0][0].callback_data == "again:yes"
+    assert data["save_again_url"] == url
+
+
+def press_save_again(monkeypatch, answer, user_data):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    downloads, edits = [], []
+    async def fake_link(status, u): downloads.append(u)
+    monkeypatch.setattr(bot, "note_from_link", fake_link)
+    async def edit(t): edits.append(t)
+    async def ok(): pass
+    query = types.SimpleNamespace(data=answer, answer=ok, edit_message_text=edit, message="status")
+    upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.save_again_pressed(upd, types.SimpleNamespace(user_data=user_data)))
+    return downloads, edits
+
+
+def test_save_again_downloads(monkeypatch):
+    downloads, _ = press_save_again(monkeypatch, "again:yes", {"save_again_url": "https://x.com/a/status/1"})
+    assert downloads == ["https://x.com/a/status/1"]
+
+
+def test_save_again_cancel_downloads_nothing(monkeypatch):
+    downloads, edits = press_save_again(monkeypatch, "again:no", {"save_again_url": "https://x.com/a/status/1"})
+    assert downloads == [] and "Nothing downloaded" in edits[0]
