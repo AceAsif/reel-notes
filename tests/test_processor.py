@@ -68,6 +68,15 @@ def test_invented_link_dropped_real_link_kept():
     assert out[0]["link"] and out[1]["link"] == ""
 
 
+def test_invented_tool_name_marked_unverified():
+    res = [{"name": "Claude-Mem", "link": ""}, {"name": "SuperFakeTool", "link": ""}]
+    out = p.mark_unverified_names(res, "install claude mem today")
+    assert "unverified" not in out[0]
+    assert out[1]["unverified"]
+    assert p.resource_line(out[1]).startswith("SuperFakeTool (unverified) ")
+    assert "(unverified)" not in p.resource_line(out[0])
+
+
 # ---- notes, actions, search -------------------------------------------------
 
 def test_duplicate_check_ignores_tracking(notes):

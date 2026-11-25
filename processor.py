@@ -662,8 +662,8 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
     or "Muse" would match a random popular repo."""
     code = mentions_code(source_text)
     for r in resources:
-        if not isinstance(r, dict):
-            continue
+        if not isinstance(r, dict) or r.get("unverified"):
+            continue                            # no GitHub lookup for a name the video never said
         link = str(r.get("link", "")).strip()
         m = GITHUB_REPO_RE.search(link)
         if m:                                   # already a repo link: check it's real
@@ -722,6 +722,18 @@ def drop_invented_links(resources: list, source_text: str) -> list:
     return resources
 
 
+def mark_unverified_names(resources: list, source_text: str) -> list:
+    """Flag tool/plugin names that are not in the transcript, OCR or caption.
+
+    The AI can invent names. resource_line() then shows them as '(unverified)'.
+    """
+    squashed = squash(source_text)              # 'claude-mem' matches 'Claude mem'
+    for r in resources:
+        if isinstance(r, dict) and squash(str(r.get("name", ""))) not in squashed:
+            r["unverified"] = True
+    return resources
+
+
 # 'strix.ai/docs', 'github.com/a/b', 'www.nas.com': no spaces, a dot, a real ending
 BARE_DOMAIN_RE = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#]\S*)?$", re.I)
 
@@ -740,6 +752,8 @@ def resource_line(r, category: str = "") -> str:
             link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
         else:
             link = "https://www.google.com/search?q=" + quote_plus(name)
+    if r.get("unverified"):
+        name += " (unverified)"
     line = f"{name} {link}".strip()
     if "stars" in r:
         line += f"  ⭐ {format_stars(int(r['stars']))}"
