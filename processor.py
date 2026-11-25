@@ -15,7 +15,6 @@ import tempfile
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import pytesseract
 import requests
@@ -670,7 +669,6 @@ def enrich_with_github(resources: list, category: str, source_text: str) -> list
             info = repo_info(m.group(1), m.group(2))
         elif (not link and category in ("tech", "programming") and code
               and not COURSE_RE.search(str(r.get("name", "")))):
-            r["search"] = "github"              # fallback link: GitHub search
             info = find_repo(str(r.get("name", "")), source_text)
         else:
             info = None
@@ -748,10 +746,7 @@ def resource_line(r, category: str = "") -> str:
     if link and not link.lower().startswith("http") and BARE_DOMAIN_RE.match(link):
         link = "https://" + link                  # 'strix.ai/docs' is a real link
     if not link.lower().startswith("http"):
-        if r.get("search") == "github":
-            link = "https://github.com/search?type=repositories&q=" + quote_plus(name)
-        else:
-            link = "https://www.google.com/search?q=" + quote_plus(name)
+        link = "— No repo found"                 # no search link: it often led to the wrong thing
     if r.get("unverified"):
         name += " (unverified)"
     line = f"{name} {link}".strip()

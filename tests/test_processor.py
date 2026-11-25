@@ -553,7 +553,7 @@ def test_no_github_search_when_video_is_not_about_code(monkeypatch):
     text = "Go to settings and search for DNS. Muse from Meta, Grokbot from X."
     res = p.enrich_with_github([{"name": "Settings"}, {"name": "Muse"}], "tech", text)
     assert called == []
-    assert "google.com/search" in p.resource_line(res[0], "tech")
+    assert p.resource_line(res[0], "tech") == "Settings — No repo found"
 
 
 def test_github_search_when_video_mentions_open_source(monkeypatch):
@@ -567,11 +567,11 @@ ROADMAP = ("Core developer workflow: terminal, VS Code, Git/GitHub. GitHub Skill
            "Git and GitHub workflow. Python Tutorial — official documentation")
 
 
-def test_roadmap_courses_get_google_links(monkeypatch):
+def test_roadmap_courses_get_no_repo_found(monkeypatch):
     monkeypatch.setattr(p, "find_repo", lambda n, s: {"link": "https://github.com/x/y", "stars": 9})
     res = p.enrich_with_github([{"name": "Python Tutorial"}, {"name": "SQLBolt"},
                                 {"name": "GitHub Skills"}], "programming", ROADMAP)
-    assert all("google.com/search" in p.resource_line(r, "programming") for r in res)
+    assert all(p.resource_line(r, "programming").endswith("No repo found") for r in res)
 
 
 def test_course_names_skipped_even_for_open_source(monkeypatch):
@@ -762,9 +762,15 @@ def test_link_shown_without_https_is_kept(link, shown):
     assert shown in p.resource_line({"name": "T", "link": link}, "tech")
 
 
-def test_not_a_link_still_gets_search():
-    assert "google.com/search" in p.resource_line({"name": "T", "link": "install it"}, "other")
-    assert "google.com/search" in p.resource_line({"name": "T", "link": "Muse"}, "other")
+def test_not_a_link_says_no_repo_found():
+    for bad in ("install it", "Muse", ""):
+        line = p.resource_line({"name": "T", "link": bad}, "other")
+        assert line == "T — No repo found" and "search" not in line
+
+
+def test_real_repo_link_kept_without_no_repo_text():
+    line = p.resource_line({"name": "B", "link": "https://github.com/a/b"}, "tech")
+    assert "https://github.com/a/b" in line and "No repo found" not in line
 
 
 def test_repo_name_at_end_of_sentence(monkeypatch):
