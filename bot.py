@@ -113,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short, TikTok, Threads or X video link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix  /tools\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /redo fast 2 (from the saved text, no download)  "
         "/health  /update\n\n"
@@ -1018,6 +1018,20 @@ async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines)[:4000])
 
 
+async def tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tools lists the tools and plugins found in your notes."""
+    if not is_allowed(update):
+        return
+    found = processor.all_tools()
+    if not found:
+        await update.message.reply_text("🧰 No tools found in your notes yet.")
+        return
+    lines = ["🧰 Tools in your notes:", ""]
+    lines += [f"{name} ({count}) {link}" for name, link, count in found]
+    for text in processor.split_messages(lines):
+        await update.message.reply_text(text, disable_web_page_preview=True)
+
+
 async def retag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/retag adds tags to older notes that were saved before tags existed."""
     if not is_allowed(update):
@@ -1642,6 +1656,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(todo_button_pressed, pattern=r"^todo:"))
     app.add_handler(CommandHandler("nudge", nudge))
     app.add_handler(CommandHandler("tags", tags))
+    app.add_handler(CommandHandler("tools", tools))
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))

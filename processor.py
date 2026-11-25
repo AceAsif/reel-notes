@@ -1428,6 +1428,45 @@ def notes_with_tag(tag: str) -> list[Path]:
     return sorted(hits, reverse=True)
 
 
+TOOL_LINE_RE = re.compile(r"- (.+?)(?: (https?://\S+)| — No repo found|$)")
+
+
+def all_tools() -> list[tuple[str, str, int]]:
+    """(name, link or 'No repo found', notes count) from every note's '## Resources'.
+    Most mentioned first, then by name. '(unverified)' names are left out."""
+    found: dict[str, list] = {}
+    folders = [f for f in (NOTES_DIR, PENDING_DIR) if f.is_dir()]
+    for path in (p for f in folders for p in f.glob("*.md")):
+        seen = set()                                  # one count per note
+        for line in note_sections(path).get("Resources", []):
+            m = TOOL_LINE_RE.match(line)
+            name = m.group(1).strip() if m else ""
+            if not name or name.endswith("(unverified)") or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            link = m.group(2) or ""
+            if "/search?" in link:                    # old notes: a search link is not a repo
+                link = ""
+            entry = found.setdefault(name.lower(), [name, "", 0])
+            entry[1] = entry[1] or link
+            entry[2] += 1
+    tools = [(n, link or "No repo found", c) for n, link, c in found.values()]
+    return sorted(tools, key=lambda t: (-t[2], t[0].lower()))
+
+
+def split_messages(lines: list[str], limit: int = 4000) -> list[str]:
+    """Join lines into messages under Telegram's 4096-character limit."""
+    messages, current = [], ""
+    for line in lines:
+        line = line[:limit]
+        if current and len(current) + 1 + len(line) > limit:
+            messages.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    return messages + [current] if current else messages
+
+
 def all_tags() -> list[tuple[str, int]]:
     """Every tag with how many notes use it, most used first."""
     counts: dict[str, int] = {}

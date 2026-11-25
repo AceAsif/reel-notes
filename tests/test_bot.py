@@ -799,3 +799,14 @@ def test_save_again_downloads(monkeypatch):
 def test_save_again_cancel_downloads_nothing(monkeypatch):
     downloads, edits = press_save_again(monkeypatch, "again:no", {"save_again_url": "https://x.com/a/status/1"})
     assert downloads == [] and "Nothing downloaded" in edits[0]
+
+
+def test_tools_command_says_when_there_are_none(monkeypatch):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "all_tools", lambda: [])
+    replies = []
+    async def reply(text, **kw): replies.append(text)
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(reply_text=reply),
+                                effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.tools(upd, None))
+    assert replies == ["🧰 No tools found in your notes yet."]

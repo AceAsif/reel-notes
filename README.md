@@ -55,6 +55,7 @@ Reel video ───────────────────────
 | `/notes` | Lists your 10 newest notes |
 | `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
 | `/tags` | Lists all your tags with how many notes use each |
+| `/tools` | Lists the tools and plugins in your notes: name, link (or "No repo found") and how many notes mention it |
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |

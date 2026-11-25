@@ -1146,3 +1146,30 @@ def test_usage_counter_and_text():
     text = p.usage_text()
     assert text.splitlines()[1] == "2× /todo" and "1× (chat)" in text and "1× /ask" in text
     assert "since" in text.splitlines()[0]
+
+
+# ---- /tools: tools and plugins found in the notes ----------------------------------
+
+def test_tools_counted_once_per_note_and_unverified_skipped(notes):
+    make_note(title="A", resources=[{"name": "Strix", "link": "https://github.com/a/strix"},
+                                    {"name": "Strix", "link": ""},              # same note: once
+                                    {"name": "Ghost", "link": "", "unverified": True},
+                                    {"name": "Muse", "link": ""}])
+    make_note(title="B", source="https://x/2", resources=[{"name": "strix", "link": ""}])
+    p.PENDING_DIR.mkdir(parents=True)
+    (p.PENDING_DIR / "c.md").write_text("# C\n\n## Resources\n- Aider https://www.google.com/search?q=Aider\n",
+                                        encoding="utf-8")
+    assert p.all_tools() == [("Strix", "https://github.com/a/strix", 2),
+                             ("Aider", "No repo found", 1),                     # old search link
+                             ("Muse", "No repo found", 1)]
+
+
+def test_tools_empty_folder(notes):
+    assert p.all_tools() == []
+
+
+def test_long_tool_list_is_split():
+    lines = [f"Tool {i} (1) https://github.com/a/tool-{i}" for i in range(300)]
+    messages = p.split_messages(lines)
+    assert len(messages) > 1 and all(len(m) <= 4000 for m in messages)
+    assert "\n".join(messages).splitlines() == lines                          # nothing lost
