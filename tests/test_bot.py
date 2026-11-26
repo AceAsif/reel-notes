@@ -828,3 +828,8 @@ def test_tools_shows_tool_model_repo_and_all_shows_everything(monkeypatch, args,
     text = "\n".join(replies)
     assert {n for n in ("Strix", "Fable 5.2", "Claude", "Python", "NVIDIA") if n in text} == shown
     assert ("[language]" in text) == bool(args)
+    if args:
+        assert text.startswith("🧰 Everything in your notes: 5\n"
+                               "tool 1, model 1, repo 1, language 1, course 0, company 1, channel 0, other 0\n")
+    else:
+        assert text.startswith("🧰 Tools in your notes: 3\n")

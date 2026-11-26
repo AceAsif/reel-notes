@@ -1444,7 +1444,9 @@ CHANNEL_RE = re.compile(r"youtube channel|\bchannel$|\bon (?:instagram|tiktok|yo
 COURSE_NAME_RE = re.compile(
     r"\b(?:course|courses|specialization|academy|bootcamp|intensive|tutorial|fundamentals|"
     r"elements of ai|essence of|kaggle|learn:|career essentials|skillsbuild|cs50\w*)\b", re.I)
-SHARED_LINK_LIMIT = 3          # a link used by this many different tools is a guess, not theirs
+TOOL_TYPES = ("tool", "model", "repo", "language", "course", "company", "channel", "other")
+FILE_NAME_RE = re.compile(r"\.(?:xlsx?|csv|pdf|docx?|pptx?|txt|json|zip)$", re.I)   # 'jobs.xlsx' is a file
+SHARED_LINK_LIMIT = 3         # a link used by this many different tools is a guess, not theirs
 
 
 def load_tool_catalog() -> dict:
@@ -1498,7 +1500,7 @@ def clean_tools(raw: list[tuple[str, str, str]], catalog: dict | None = None) ->
             name = name[:folded.start()].strip()
         name = aliases.get(squash(name), name)
         key = squash(name)
-        if not key or key in stop:
+        if not key or key in stop or FILE_NAME_RE.search(name):
             continue
         g = groups.setdefault(key, {"names": {}, "notes": set(), "own": [], "folded": []})
         g["names"][name] = g["names"].get(name, 0) + 1

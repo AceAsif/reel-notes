@@ -1028,10 +1028,12 @@ async def tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("🧰 No tools found in your notes yet.")
         return
     if show_all:
-        lines = ["🧰 Everything in your notes:", ""]
+        kinds = [t[3] for t in found]
+        lines = [f"🧰 Everything in your notes: {len(found)}",
+                 ", ".join(f"{k} {kinds.count(k)}" for k in processor.TOOL_TYPES), ""]
         lines += [f"{name} ({count}) [{kind}] {link}" for name, link, count, kind in found]
     else:
-        lines = ["🧰 Tools in your notes:", ""]
+        lines = [f"🧰 Tools in your notes: {len(found)}", ""]
         lines += [f"{name} ({count}) {link}" for name, link, count, _ in found]
         lines += ["", "Courses, companies and more: /tools all"]
     for text in processor.split_messages(lines):

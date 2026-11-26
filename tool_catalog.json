@@ -11,6 +11,8 @@
     "Anthropic Claude": "Claude",
     "Chat GPT": "ChatGPT",
     "OpenAI ChatGPT": "ChatGPT",
+    "ChachiBT": "ChatGPT",
+    "C-Dance 2.5": "Seedance 2.5",
     "Google Gemini": "Gemini",
     "Gemini AI": "Gemini",
     "Claude Fable 5.2": "Fable 5.2",
@@ -124,6 +126,9 @@
     "Post sales", "Sales calls", "Meeting prep", "Email drafting", "Calendar automation",
     "Workflow automation", "YouTube tutorial", "YouTube Video", "Practicals Only", "Business Agent",
     "Roadmap 2027", "Private DNS", "Rewind Menu", "Clear Command", "Settings",
+    "30 Day Plan to Master Your Communication", "Phone Addict? (Start this tonight)",
+    "Animated History Docs Guide", "Systematic Withdrawal Plan (SWP)", "AI CEO Challenge",
+    "Claim Your Business", "SECU AUUIO 1.U", "Q3 Revenue Report",
 
     "Backlit Silhouette", "Candle Light", "Clamshell", "Colored Gels", "Dappled Light",
     "Direct Flash", "Fire Light", "Flashlight", "Fluorescent", "Golden Hour", "Hard Top Light",
