@@ -15,3 +15,4 @@ bot_state.json
 
 .claude/settings.local.json
 tools-export.csv
+tools-export-share.csv
