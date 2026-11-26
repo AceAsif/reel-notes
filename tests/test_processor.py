@@ -1159,9 +1159,100 @@ def test_tools_counted_once_per_note_and_unverified_skipped(notes):
     p.PENDING_DIR.mkdir(parents=True)
     (p.PENDING_DIR / "c.md").write_text("# C\n\n## Resources\n- Aider https://www.google.com/search?q=Aider\n",
                                         encoding="utf-8")
-    assert p.all_tools() == [("Strix", "https://github.com/a/strix", 2),
-                             ("Aider", "No repo found", 1),                     # old search link
-                             ("Muse", "No repo found", 1)]
+    assert p.all_tools() == [("Strix", "https://github.com/a/strix", 2, "repo"),
+                             ("Aider", "No repo found", 1, "tool"),             # old search link
+                             ("Muse", "No repo found", 1, "tool")]
+
+
+# ---- /tools clean-up rules (tool_catalog.json) ------------------------------------
+
+CAT = {"aliases": {"Higgs Field": "Higgsfield", "Higgsfield.ai": "Higgsfield", "Higgsfield MCP": "Higgsfield"},
+       "entries": {"Higgsfield": {"type": "tool", "link": "https://higgsfield.ai"},
+                   "Claude": {"type": "tool", "link": "https://claude.ai"},
+                   "Python": {"type": "language"}},
+       "stoplist": ["AI agents", "Golden Hour", "Rim Light"]}
+
+
+def names(rows):
+    return {r[0]: r for r in rows}
+
+
+def test_tools_aliases_fold_into_one_name_counted_once_per_note():
+    rows = p.clean_tools([("Higgs Field", "", "a.md"), ("Higgsfield.ai", "", "a.md"),
+                          ("Higgsfield MCP", "https://mcp.higgsfield.ai/mcp", "b.md")], CAT)
+    assert rows == [("Higgsfield", "https://higgsfield.ai", 2, "tool")]
+
+
+def test_tools_official_link_from_catalog_wins():
+    rows = p.clean_tools([("Claude", "https://github.com/someone/claude-clone", "a.md")], CAT)
+    assert rows == [("Claude", "https://claude.ai", 1, "tool")]
+
+
+def test_tools_stoplist_drops_generic_and_lighting_terms():
+    rows = p.clean_tools([("AI agents", "", "a.md"), ("golden hour", "", "a.md"),
+                          ("Rim-Light", "", "a.md"), ("Strix", "", "a.md")], CAT)
+    assert [r[0] for r in rows] == ["Strix"]
+
+
+@pytest.mark.parametrize("suffix", ["GitHub", "Website", "Docs", "Documentation", "Integrations",
+                                    "Example", "GitHub Repo"])
+def test_tools_suffix_names_fold_into_parent_and_give_the_link(suffix):
+    rows = p.clean_tools([("OpenJarvis", "", "a.md"),
+                          (f"OpenJarvis {suffix}", "https://open-jarvis.example.org/x", "b.md")], CAT)
+    assert rows == [("OpenJarvis", "https://open-jarvis.example.org/x", 2, "tool")]
+
+
+def test_tools_link_shared_by_three_tools_is_dropped():
+    raw = [(n, "https://news.example.com", f"{n}.md") for n in ("Aa", "Bb", "Cc")]
+    raw += [("Dd", "https://dd.example.com", "d.md"), ("Ee", "https://two.example.com", "e.md"),
+            ("Ff", "https://two.example.com", "f.md")]
+    links = {r[0]: r[1] for r in p.clean_tools(raw, CAT)}
+    assert links["Aa"] == links["Bb"] == links["Cc"] == "No repo found"
+    assert links["Dd"] == "https://dd.example.com" and links["Ff"] == "https://two.example.com"
+
+
+@pytest.mark.parametrize("link", [
+    "https://generativelanguage.googleapis.com/v1beta",       # API endpoint
+    "https://api.example.com/models", "https://mcp.example.ai/mcp", "https://example.com/v1/chat",
+    "https://Animated-History-Docs-Guide.pdf", "https://example.com/files/guide.pdf",
+    "https://t.co/AbC123", "https://tinyurl.com/3d6zzd6r",
+    "https://example.com/csv%20|%20file.csv", "https://example.com/a b", "not a link"])
+def test_tools_bad_links_are_dropped(link):
+    assert p.clean_tools([("Zed Tool", link, "a.md")], CAT)[0][1] == "No repo found"
+
+
+@pytest.mark.parametrize("link", ["https://higgsfield.ai/mcp", "https://youtu.be/abcDEF12345",
+                                  "https://github.com/a/b", "https://docs.nvidia.com/skills"])
+def test_tools_good_links_are_kept(link):
+    assert p.tool_link_ok(link)
+
+
+def test_tools_generic_github_repo_name_becomes_repo_name():
+    rows = p.clean_tools([("GitHub Repository", "https://github.com/ethan/sellbird", "a.md"),
+                          ("GitHub repo", "https://github.com/x/ai-rmemory.git", "b.md"),
+                          ("GitHub Repository", "", "c.md")], CAT)                 # no link: dropped
+    assert names(rows) == {"sellbird": ("sellbird", "https://github.com/ethan/sellbird", 1, "repo"),
+                           "ai-rmemory": ("ai-rmemory", "https://github.com/x/ai-rmemory.git", 1, "repo")}
+
+
+def test_tools_types():
+    rows = names(p.clean_tools([("Python", "", "a.md"), ("Someone's YouTube Channel", "", "a.md"),
+                                ("Kaggle Learn: Pandas", "", "a.md"), ("Strix", "https://github.com/u/strix", "a.md"),
+                                ("Muse", "", "a.md")], CAT))
+    assert {n: r[3] for n, r in rows.items()} == {"Python": "language", "Someone's YouTube Channel": "channel",
+                                                  "Kaggle Learn: Pandas": "course", "Strix": "repo",
+                                                  "Muse": "tool"}
+
+
+def test_real_tool_catalog_loads_and_is_consistent():
+    cat = p.load_tool_catalog()
+    types = {"tool", "model", "repo", "language", "course", "company", "channel", "other"}
+    assert cat["aliases"] and cat["entries"] and cat["stoplist"]
+    assert all(e["type"] in types for e in cat["entries"].values())
+    assert all(target in cat["entries"] for target in cat["aliases"].values()
+               if target not in ("REA", "FreeLLMAPI", "SynthID Remover"))
+    assert all(p.tool_link_ok(e["link"]) for e in cat["entries"].values() if "link" in e)
+    assert p.clean_tools([("Higgs Field MCP", "", "a.md")]) == [("Higgsfield", "https://higgsfield.ai", 1, "tool")]
 
 
 def test_tools_empty_folder(notes):

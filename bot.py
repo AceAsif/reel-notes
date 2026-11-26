@@ -113,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short, TikTok, Threads or X video link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix  /tools\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix  /tools  /tools all\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /redo fast 2 (from the saved text, no download)  "
         "/health  /update\n\n"
@@ -1019,15 +1019,21 @@ async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/tools lists the tools and plugins found in your notes."""
+    """/tools lists the tools, models and repos in your notes. /tools all lists everything."""
     if not is_allowed(update):
         return
-    found = processor.all_tools()
+    show_all = bool(context and context.args and context.args[0].lower() == "all")
+    found = [t for t in processor.all_tools() if show_all or t[3] in processor.TOOL_TYPES_SHOWN]
     if not found:
         await update.message.reply_text("🧰 No tools found in your notes yet.")
         return
-    lines = ["🧰 Tools in your notes:", ""]
-    lines += [f"{name} ({count}) {link}" for name, link, count in found]
+    if show_all:
+        lines = ["🧰 Everything in your notes:", ""]
+        lines += [f"{name} ({count}) [{kind}] {link}" for name, link, count, kind in found]
+    else:
+        lines = ["🧰 Tools in your notes:", ""]
+        lines += [f"{name} ({count}) {link}" for name, link, count, _ in found]
+        lines += ["", "Courses, companies and more: /tools all"]
     for text in processor.split_messages(lines):
         await update.message.reply_text(text, disable_web_page_preview=True)
 

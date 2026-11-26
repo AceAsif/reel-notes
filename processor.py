@@ -15,6 +15,7 @@ import tempfile
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytesseract
 import requests
@@ -1431,27 +1432,110 @@ def notes_with_tag(tag: str) -> list[Path]:
 TOOL_LINE_RE = re.compile(r"- (.+?)(?: (https?://\S+)| — No repo found|$)")
 
 
-def all_tools() -> list[tuple[str, str, int]]:
-    """(name, link or 'No repo found', notes count) from every note's '## Resources'.
-    Most mentioned first, then by name. '(unverified)' names are left out."""
-    found: dict[str, list] = {}
+TOOL_CATALOG_FILE = Path(__file__).with_name("tool_catalog.json")
+TOOL_TYPES_SHOWN = ("tool", "model", "repo")          # /tools; /tools all shows every type
+# 'Artemis GitHub', 'OpenJarvis Documentation', 'Apinex Integrations': part of the parent tool
+TOOL_SUFFIX_RE = re.compile(
+    r"\s+(?:github(?:\s+repo(?:sitory)?)?|website|docs|documentation|integrations|example)$", re.I)
+GENERIC_REPO_NAMES = {"githubrepository", "githubrepo"}
+LINK_SHORTENERS = {"t.co", "tinyurl.com", "bit.ly", "goo.gl", "ow.ly", "buff.ly", "is.gd",
+                   "rebrand.ly", "cutt.ly", "shorturl.at", "tiny.cc"}
+CHANNEL_RE = re.compile(r"youtube channel|\bchannel$|\bon (?:instagram|tiktok|youtube|x)$", re.I)
+COURSE_NAME_RE = re.compile(
+    r"\b(?:course|courses|specialization|academy|bootcamp|intensive|tutorial|fundamentals|"
+    r"elements of ai|essence of|kaggle|learn:|career essentials|skillsbuild|cs50\w*)\b", re.I)
+SHARED_LINK_LIMIT = 3          # a link used by this many different tools is a guess, not theirs
+
+
+def load_tool_catalog() -> dict:
+    try:
+        data = json.loads(TOOL_CATALOG_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    return {"aliases": data.get("aliases", {}), "entries": data.get("entries", {}),
+            "stoplist": data.get("stoplist", [])}
+
+
+def tool_link_ok(link: str) -> bool:
+    """A real web page: not an API endpoint, a file name, a shortener or text with spaces."""
+    if re.search(r"\s|%20|\|", link) or not re.match(r"https?://[^/\s]+\.[a-z]{2,}(?:[/?#]|$)", link, re.I):
+        return False
+    parts = urlsplit(link)
+    host, path = (parts.hostname or "").lower(), parts.path.lower()
+    if host.removeprefix("www.") in LINK_SHORTENERS or host.endswith(".pdf") or path.endswith(".pdf"):
+        return False
+    return not (host.startswith(("api.", "mcp.")) or host.endswith("googleapis.com")
+                or path.startswith("/api/") or re.search(r"/v\d+(?:alpha|beta)?\d*(?:/|$)", path))
+
+
+def tool_type(name: str, link: str) -> str:
+    if CHANNEL_RE.search(name):
+        return "channel"
+    if COURSE_NAME_RE.search(name):
+        return "course"
+    return "repo" if GITHUB_REPO_RE.search(link) else "tool"
+
+
+def clean_tools(raw: list[tuple[str, str, str]], catalog: dict | None = None) -> list[tuple]:
+    """(name, link, note file) rows -> (name, link or 'No repo found', notes count, type).
+    Folds aliases and 'X GitHub'-style names into one tool, drops stoplist names and bad links."""
+    cat = catalog if catalog is not None else load_tool_catalog()
+    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
+    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
+    stop = {squash(s) for s in cat.get("stoplist", [])}
+    groups: dict[str, dict] = {}
+    for name, link, note in raw:
+        name, link = name.replace("�", "").strip(), link.strip()
+        if "/search?" in link:                        # old notes: a search link is not a repo
+            link = ""
+        if squash(name) in GENERIC_REPO_NAMES:        # 'GitHub Repository' -> the repo's name
+            m = GITHUB_REPO_RE.search(link)
+            if not m:
+                continue
+            name = m.group(2).removesuffix(".git")
+        folded = TOOL_SUFFIX_RE.search(name)
+        if folded and name[:folded.start()].strip():
+            name = name[:folded.start()].strip()
+        name = aliases.get(squash(name), name)
+        key = squash(name)
+        if not key or key in stop:
+            continue
+        g = groups.setdefault(key, {"names": {}, "notes": set(), "own": [], "folded": []})
+        g["names"][name] = g["names"].get(name, 0) + 1
+        g["notes"].add(note)
+        if link:
+            g["folded" if folded else "own"].append(link)
+    users: dict[str, set] = {}
+    for key, g in groups.items():
+        for link in g["own"] + g["folded"]:
+            users.setdefault(link.rstrip("/").lower(), set()).add(key)
+    shared = {link for link, keys in users.items() if len(keys) >= SHARED_LINK_LIMIT}
+    tools = []
+    for key, g in groups.items():
+        name, info = entries.get(key) or (max(g["names"], key=g["names"].get), {})
+        good = [l for l in g["folded"] + g["own"]       # a 'Website'/'GitHub' link is the best guess
+                if tool_link_ok(l) and l.rstrip("/").lower() not in shared]
+        link = info.get("link") or (good[0] if good else "")
+        tools.append((name, link or "No repo found", len(g["notes"]), info.get("type") or tool_type(name, link)))
+    return sorted(tools, key=lambda t: (-t[2], t[0].lower()))
+
+
+def raw_tools() -> list[tuple[str, str, str]]:
+    """(name, link, note file name) for each line under '## Resources' in every note."""
+    rows = []
     folders = [f for f in (NOTES_DIR, PENDING_DIR) if f.is_dir()]
     for path in (p for f in folders for p in f.glob("*.md")):
-        seen = set()                                  # one count per note
         for line in note_sections(path).get("Resources", []):
             m = TOOL_LINE_RE.match(line)
             name = m.group(1).strip() if m else ""
-            if not name or name.endswith("(unverified)") or name.lower() in seen:
-                continue
-            seen.add(name.lower())
-            link = m.group(2) or ""
-            if "/search?" in link:                    # old notes: a search link is not a repo
-                link = ""
-            entry = found.setdefault(name.lower(), [name, "", 0])
-            entry[1] = entry[1] or link
-            entry[2] += 1
-    tools = [(n, link or "No repo found", c) for n, link, c in found.values()]
-    return sorted(tools, key=lambda t: (-t[2], t[0].lower()))
+            if name and not name.endswith("(unverified)"):
+                rows.append((name, m.group(2) or "", path.name))
+    return rows
+
+
+def all_tools() -> list[tuple[str, str, int, str]]:
+    """(name, link or 'No repo found', notes count, type), cleaned. Most mentioned first."""
+    return clean_tools(raw_tools())
 
 
 def split_messages(lines: list[str], limit: int = 4000) -> list[str]:
