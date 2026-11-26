@@ -11,7 +11,7 @@ notes - List latest notes
 note - Open a note, e.g. /note 1
 file - Get a note as a file, e.g. /file 1
 tags - List all tags
-tools - List tools and plugins from your notes
+tools - List tools from your notes (/tools all for everything)
 tag - Notes with a tag, e.g. /tag python
 renametag - Rename a tag, e.g. /renametag claudie claude
 retag - Add tags to older notes

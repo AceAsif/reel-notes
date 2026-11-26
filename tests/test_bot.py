@@ -810,3 +810,21 @@ def test_tools_command_says_when_there_are_none(monkeypatch):
                                 effective_user=types.SimpleNamespace(id=1))
     asyncio.run(bot.tools(upd, None))
     assert replies == ["🧰 No tools found in your notes yet."]
+
+
+@pytest.mark.parametrize("args,shown", [([], {"Strix", "Fable 5.2", "Claude"}),
+                                        (["all"], {"Strix", "Fable 5.2", "Claude", "Python", "NVIDIA"})])
+def test_tools_shows_tool_model_repo_and_all_shows_everything(monkeypatch, args, shown):
+    monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
+    monkeypatch.setattr(bot.processor, "all_tools", lambda: [
+        ("Claude", "https://claude.ai", 3, "tool"), ("Strix", "https://github.com/u/strix", 2, "repo"),
+        ("Fable 5.2", "No repo found", 2, "model"), ("Python", "https://www.python.org", 1, "language"),
+        ("NVIDIA", "No repo found", 1, "company")])
+    replies = []
+    async def reply(text, **kw): replies.append(text)
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(reply_text=reply),
+                                effective_user=types.SimpleNamespace(id=1))
+    asyncio.run(bot.tools(upd, types.SimpleNamespace(args=args)))
+    text = "\n".join(replies)
+    assert {n for n in ("Strix", "Fable 5.2", "Claude", "Python", "NVIDIA") if n in text} == shown
+    assert ("[language]" in text) == bool(args)
