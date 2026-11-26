@@ -1255,6 +1255,19 @@ def test_real_tool_catalog_loads_and_is_consistent():
     assert p.clean_tools([("Higgs Field MCP", "", "a.md")]) == [("Higgsfield", "https://higgsfield.ai", 1, "tool")]
 
 
+@pytest.mark.parametrize("name", ["30 Day Plan to Master Your Communication", "Phone Addict? (Start this tonight)",
+                                  "Animated History Docs Guide", "Systematic Withdrawal Plan (SWP)",
+                                  "AI CEO Challenge", "Claim Your Business", "SECU AUUIO 1.U",
+                                  "Q3 Revenue Report", "B jobs_list.xlsx", "report.csv", "Guide.PDF"])
+def test_real_catalog_drops_non_tools_and_file_names(name):
+    assert p.clean_tools([(name, "", "a.md")]) == []
+
+
+def test_real_catalog_aliases_chachibt_and_c_dance():
+    rows = p.clean_tools([("ChachiBT", "", "a.md"), ("ChatGPT", "", "b.md"), ("C-Dance 2.5", "", "a.md")])
+    assert rows == [("ChatGPT", "https://chatgpt.com", 2, "tool"), ("Seedance 2.5", "No repo found", 1, "model")]
+
+
 def test_tools_empty_folder(notes):
     assert p.all_tools() == []
 
