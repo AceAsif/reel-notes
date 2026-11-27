@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def private_files_in_tmp(tmp_path, monkeypatch):
     import processor
     for name, file in (("STATE_FILE", "state.json"), ("CLEANUP_UNDO_FILE", "undo.json"),
-                       ("SENT_JOBS_FILE", "sent.json"), ("REMINDERS_FILE", "reminders.json")):
+                       ("SENT_JOBS_FILE", "sent.json"), ("REMINDERS_FILE", "reminders.json"),
+                       ("LINK_INDEX_FILE", "link_index.json")):
         monkeypatch.setattr(processor, name, tmp_path / "private" / file, raising=False)
     monkeypatch.setattr(processor, "PENDING_DIR", tmp_path / "private" / "pending", raising=False)
     (tmp_path / "private").mkdir()

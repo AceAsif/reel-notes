@@ -113,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Put it in .env as ALLOWED_USER_ID, then restart me.\n\n"
         "Send me a reel, carousel, YouTube Short, TikTok, Threads or X video link (or a video) and I'll turn it into a note.\n\n"
         "Actions: /todo  /cleanup  /undocleanup  /prompt 3  /done 2  /skip 3  /high 3  /low 3  /due 3 friday  /remind 3 friday  /nudge  /stats\n"
-        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix  /tools  /tools all\n"
+        "Notes: /ask question  /notes  /note 1  /file 1  /plan 1 3  /plan #python  /search strix  /tools  /tools all  /dupes\n"
         "Tags: /tags  /tag python  /renametag old new  /retag\n"
         "Fix: /redo (make the newest note again)  /redo fast 2 (from the saved text, no download)  "
         "/health  /update\n\n"
@@ -277,7 +277,7 @@ async def save_again_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     data = context.user_data
     path = Path(data.get("save_again_path") or ".")
-    if query.data == "again:show":                # keep the link: Save again still works after this
+    if query.data in ("again:show", "again:full"):  # keep the link: Save again still works after this
         if not path.is_file():
             await query.edit_message_text(
                 f"⚠️ The old note was moved or is missing: {path.name}\n"
@@ -285,8 +285,12 @@ async def save_again_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 reply_markup=InlineKeyboardMarkup([[SAVE_AGAIN_BUTTON, CANCEL_AGAIN_BUTTON]]))
             return
         text = path.read_text(encoding="utf-8")
-        for part in processor.split_messages(text.splitlines()):
-            await query.message.reply_text(part, disable_web_page_preview=True)
+        full = query.data == "again:full"
+        parts = processor.split_messages((text if full else processor.short_note(text)).splitlines())
+        for i, part in enumerate(parts):
+            more = None if full or i < len(parts) - 1 else InlineKeyboardMarkup(
+                [[InlineKeyboardButton("📄 Full note", callback_data="again:full")]])
+            await query.message.reply_text(part, disable_web_page_preview=True, reply_markup=more)
         return
     url = data.pop("save_again_url", "")
     data.pop("save_again_path", None)
@@ -1059,6 +1063,24 @@ async def tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines)[:4000])
 
 
+async def dupes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/dupes lists videos that have more than one note. Nothing is deleted."""
+    if not is_allowed(update):
+        return
+    found = processor.duplicate_notes()
+    if not found:
+        await update.message.reply_text("👍 No duplicates: every video has one note.")
+        return
+    lines = [f"🔁 Videos with more than one note: {len(found)}"]
+    for _, entries in found:
+        lines.append("")
+        lines += [f"• {e['file']} ({e['saved']}{', pending' if e.get('folder') == 'pending' else ''})"
+                  for e in entries]
+    lines += ["", "Nothing was deleted. Delete the extra files yourself if you want."]
+    for text in processor.split_messages(lines):
+        await update.message.reply_text(text)
+
+
 async def tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/tools lists the tools, models and repos in your notes. /tools all lists everything."""
     if not is_allowed(update):
@@ -1706,6 +1728,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("nudge", nudge))
     app.add_handler(CommandHandler("tags", tags))
     app.add_handler(CommandHandler("tools", tools))
+    app.add_handler(CommandHandler("dupes", dupes))
     app.add_handler(CommandHandler("retag", retag))
     app.add_handler(CommandHandler("renametag", renametag))
     app.add_handler(CommandHandler("stats", stats))

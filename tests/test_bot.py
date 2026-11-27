@@ -795,7 +795,7 @@ def press_save_again(monkeypatch, answer, user_data):
     async def fake_link(status, u): downloads.append(u)
     monkeypatch.setattr(bot, "note_from_link", fake_link)
     async def edit(t, reply_markup=None): edits.append((t, reply_markup))
-    async def send(t, **kw): sent.append(t)
+    async def send(t, reply_markup=None, **kw): sent.append((t, reply_markup))
     async def ok(): pass
     query = types.SimpleNamespace(data=answer, answer=ok, edit_message_text=edit,
                                   message=types.SimpleNamespace(reply_text=send))
@@ -823,18 +823,36 @@ def test_save_again_cancel_says_which_note_was_kept(tmp_path, monkeypatch):
     assert edits[0][0] == "Kept the old note: 2026-11-14_2106_x.md, saved 14 Nov 2026, 21:06. Nothing downloaded."
 
 
-def test_show_old_note_sends_it_and_keeps_save_again(tmp_path, monkeypatch):
-    data = saved_data(tmp_path)
+FULL_NOTE = ("# Tip\n- Source: https://x.com/a/status/1\n\n## Summary\nShort summary.\n\n"
+             "## Key points\n- One\n\n## Resources\n- Strix https://github.com/u/strix\n\n"
+             "## Action items\n- [ ] Try it\n\n## Transcript\nthe whole transcript\n\n"
+             "## On-screen text\nscreen words\n")
+
+
+def test_show_old_note_is_short_with_a_full_note_button(tmp_path, monkeypatch):
+    data = saved_data(tmp_path, FULL_NOTE)
     downloads, edits, sent = press_save_again(monkeypatch, "again:show", data)
-    assert downloads == [] and edits == [] and sent == ["# X\n- Source: https://x.com/a/status/1"]
+    assert downloads == [] and edits == [] and len(sent) == 1
+    text, markup = sent[0]
+    assert text == ("# Tip\n## Summary\nShort summary.\n\n## Key points\n- One\n\n"
+                    "## Resources\n- Strix https://github.com/u/strix\n\n## Action items\n- [ ] Try it")
+    assert "Transcript" not in text and "screen words" not in text
+    assert markup.inline_keyboard[0][0].callback_data == "again:full"
     assert data["save_again_url"]                           # Save again still works after this
 
 
-def test_show_old_note_splits_a_long_note(tmp_path, monkeypatch):
+def test_full_note_button_sends_transcript_and_screen_text(tmp_path, monkeypatch):
+    _, _, sent = press_save_again(monkeypatch, "again:full", saved_data(tmp_path, FULL_NOTE))
+    text = "\n".join(t for t, _ in sent)
+    assert "the whole transcript" in text and "screen words" in text
+    assert all(m is None for _, m in sent)                  # no more buttons
+
+
+def test_full_note_splits_a_long_note(tmp_path, monkeypatch):
     body = "# Long\n## Transcript\n" + "word " * 2000 + "\n" + "\n".join(f"- point {i}" for i in range(400))
-    _, _, sent = press_save_again(monkeypatch, "again:show", saved_data(tmp_path, body))
-    assert len(sent) > 1 and all(len(s) <= 4096 for s in sent)
-    assert "".join(sent).replace("\n", "") == body.replace("\n", "")   # nothing lost
+    _, _, sent = press_save_again(monkeypatch, "again:full", saved_data(tmp_path, body))
+    assert len(sent) > 1 and all(len(t) <= 4096 for t, _ in sent)
+    assert "".join(t for t, _ in sent).replace("\n", "") == body.replace("\n", "")   # nothing lost
 
 
 def test_show_old_note_when_file_is_missing_offers_save_again(tmp_path, monkeypatch):

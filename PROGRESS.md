@@ -1,25 +1,35 @@
-# Progress - "Already saved" shows which note and when
-Branch: feature/already-saved-details
-Last updated: 2026-11-27
+# Progress - link index: find duplicates by video ID
+Branch: feature/link-index
+Last updated: 2026-11-28
 
 ## Done
-- Step 1: bot.py. The warning now shows the note title, file name, when it was saved and the folder
-  (notes folder or pending folder). Saved time: the note's Date line or file name (written with the PC
-  clock); if neither has a date, the file time in TIMEZONE from .env.
-- Step 2: buttons Save again, Show old note, Cancel.
-  - Show old note sends the note text in chat, split into parts under Telegram's limit. The warning and
-    the link stay, so Save again still works after it.
-  - Cancel: "Kept the old note: <file>, saved <date and time>. Nothing downloaded."
-  - File moved or missing (on Show old note): says so and offers Save again and Cancel.
-  - Video and screenshot messages show the same details, without buttons.
-- Step 3: processor.py. `split_messages` now cuts a very long line (a transcript) into parts instead of
-  cutting it off, so no text is lost.
-- Step 4: tests: details text, pending folder, Save again, Show old note, Cancel, missing file, long
-  note. README updated. Tests: 588 passed.
+- Step 1: processor.py. `normalise_url()` now gives a video ID key: `instagram:ID` (/reel/, /reels/,
+  /p/, /tv/, also after a user name), `tiktok:ID`, `youtube:ID` (watch, shorts, youtu.be), `facebook:ID`
+  (reel, watch?v=, videos, fb.watch), `x:ID`, and the Threads key. Else the clean URL. IDs keep their
+  case (Instagram IDs are case-sensitive).
+- Step 2: link index (private file in the bot folder, `LINK_INDEX_FILE` in .env can move it):
+  {version, files, links: {video key: [{file, saved, folder}]}}. It lists the note files it was built
+  from. If the file is missing, broken, an old version, or the note files on disk differ (added, moved,
+  deleted, folder away), it is rebuilt from the notes' Source lines. Real notes: 165 files, 163 videos,
+  rebuild 0.6 s, normal check under 10 ms.
+- Step 3: `write_note_file` adds each new note to the index (no rebuild). `sync_pending` rebuilds after
+  moving notes. `/redo` moves and deletions are caught by the file-list check.
+- Step 4: `find_note_by_source` uses the index (newest existing note). All download paths already call it
+  first (link, video caption, screenshots). Only Save again and /redo download on purpose.
+- Step 5: /dupes lists videos with more than one note (file, date, pending). Deletes nothing.
+- Step 6: Show old note sends title, Summary, Key points, Resources and Action items, with a Full note
+  button for the whole note (transcript and on-screen text, split if long).
+- Step 7: the index file is private: .gitignore, pre_commit_check.py, .claude/settings.json deny rules,
+  CLAUDE.md. Tests never write it (conftest moves it to a temp folder).
+- Step 8: tests/test_link_index.py (IDs per platform, /reel/ vs /reels/, tracking bits, missing and old
+  index, deleted note, hand-added note, pending move, /dupes, no download). Show old note tests updated.
+  README, /start and botfather-commands.txt updated. Tests: 621 passed.
 
 ## Next step
-- Owner: merge, pull, restart. Send a saved link again and try each button.
+- Owner: merge, pull, restart. Send /dupes (1 video on the real notes). Send a /reels/ link of a saved reel.
 
 ## Decisions
-- The saved time comes from the PC clock, so it is right when the PC uses the same zone as TIMEZONE.
-- A long note is sent as plain text, split in parts. /file still sends the note as a file.
+- /cleanup never deletes note files (it only skips actions), so it needs no index update.
+- Short links (vm.tiktok.com, facebook share links) can't be opened offline, so they only match the same
+  short link.
+- The old test that matched /reel/ABC with /reel/abc was changed: those are two different posts.

@@ -1105,34 +1105,142 @@ YOUTUBE_ID_RE = re.compile(
     r"(?:youtube\.com/(?:shorts/|watch\?(?:.*&)?v=|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
 
 
+# /reel/, /reels/, /p/ and /tv/ (also after a user name) all point to one Instagram post
+INSTAGRAM_ID_RE = re.compile(r"instagram\.com/(?:[^/?#]+/)?(?:reels?|p|tv)/([A-Za-z0-9_-]+)", re.I)
+TIKTOK_ID_RE = re.compile(r"tiktok\.com/(?:@[^/?#]+/video|v|embed(?:/v2)?)/(\d+)", re.I)
+FACEBOOK_ID_RE = re.compile(
+    r"(?:facebook\.com/(?:reel/|watch/?\?(?:[^#]*&)?v=|(?:[^/?#]+/)?videos/(?:[^/?#]+/)?)|fb\.watch/)"
+    r"([A-Za-z0-9_-]+)", re.I)
+
+
 def normalise_url(url: str) -> str:
-    """Same reel = same URL, ignoring ?igsh=... tracking bits and trailing slash.
-    YouTube keeps its video ID (watch?v=ID, shorts/ID and youtu.be/ID all match).
-    Threads: threads.com and threads.net links to one post match."""
+    """The video ID of a link, so one video = one key whatever the link looks like:
+    'instagram:ID', 'tiktok:ID', 'youtube:ID', 'facebook:ID', 'x:ID', or the Threads key.
+    Other links: the URL without ?tracking bits, #, trailing slash or capitals.
+    Short links (vm.tiktok.com, share links) can't be opened without the internet, so they
+    stay as URLs."""
+    url = url.strip()
     if threads_link.dedupe_key(url):
         return threads_link.dedupe_key(url)
-    x = X_STATUS_RE.match(url.strip())
+    x = X_STATUS_RE.match(url)
     if x:
         return "x:" + x.group(1)                 # x.com, twitter.com and mobile links: same post
-    m = YOUTUBE_ID_RE.search(url)
-    if m:
-        return "youtube:" + m.group(1)           # IDs are case-sensitive: don't lower()
+    for platform, pattern in (("youtube", YOUTUBE_ID_RE), ("instagram", INSTAGRAM_ID_RE),
+                              ("tiktok", TIKTOK_ID_RE), ("facebook", FACEBOOK_ID_RE)):
+        m = pattern.search(url)
+        if m:
+            return f"{platform}:{m.group(1)}"   # IDs are case-sensitive: don't lower()
     return url.split("?")[0].split("#")[0].rstrip("/").lower()
 
 
+# ---- link index: video ID -> notes, so a video is never downloaded twice -------------------
+# link_index.json is private (it lists note files). It keeps the list of note files it was
+# built from; when the files on disk differ (a note added, moved, deleted, or the notes folder
+# is away), it is rebuilt from the Source lines of the notes.
+
+LINK_INDEX_FILE = Path(os.getenv("LINK_INDEX_FILE", "link_index.json"))
+LINK_INDEX_VERSION = 1           # raise it when normalise_url() changes, so old keys are rebuilt
+
+
+def _note_files() -> list[tuple[str, Path]]:
+    return [(label, p) for label, folder in (("notes", NOTES_DIR), ("pending", PENDING_DIR))
+            if folder.is_dir() for p in sorted(folder.glob("*.md"))]
+
+
+def _index_entry(label: str, path: Path) -> tuple[str, dict] | None:
+    """(video key, {'file', 'saved', 'folder'}) from a note's Source line, or None."""
+    lines = path.read_text(encoding="utf-8").splitlines()[:12]
+    source = next((l[10:].strip() for l in lines[:8] if l.startswith("- Source: ")), "")
+    if not re.match(r"https?://", source):
+        return None                              # 'screenshot' or no source: nothing to match
+    saved = _note_date(path, lines) or datetime.fromtimestamp(path.stat().st_mtime)
+    return normalise_url(source), {"file": path.name, "saved": f"{saved:%Y-%m-%d %H:%M}", "folder": label}
+
+
+def _save_link_index(data: dict) -> None:
+    try:
+        LINK_INDEX_FILE.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        _log_notes(f"could not save {LINK_INDEX_FILE.name}: {exc!r}")
+
+
+def rebuild_link_index() -> dict:
+    files = _note_files()
+    links: dict[str, list] = {}
+    for label, path in files:
+        found = _index_entry(label, path)
+        if found:
+            links.setdefault(found[0], []).append(found[1])
+    data = {"version": LINK_INDEX_VERSION, "files": [f"{label}/{p.name}" for label, p in files],
+            "links": links}
+    _save_link_index(data)
+    return data
+
+
+def load_link_index() -> dict:
+    """The index, rebuilt first if it is missing, broken or out of date."""
+    try:
+        data = json.loads(LINK_INDEX_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if (not isinstance(data, dict) or data.get("version") != LINK_INDEX_VERSION
+            or data.get("files") != [f"{l}/{p.name}" for l, p in _note_files()]):
+        data = rebuild_link_index()
+    return data
+
+
+def add_to_link_index(path: Path) -> None:
+    """A note was just written: add it without reading every note again."""
+    try:
+        data = json.loads(LINK_INDEX_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return                                    # no index yet: the next check builds it
+    label = "pending" if is_pending(path) else "notes"
+    found = _index_entry(label, path)
+    data.setdefault("files", []).append(f"{label}/{path.name}")
+    data["files"] = sorted(set(data["files"]), key=lambda f: (f.split("/")[0] != "notes", f))
+    links = data.setdefault("links", {})
+    for key in links:                             # a replaced note (same name) is listed once
+        links[key] = [e for e in links[key] if (e["file"], e.get("folder")) != (path.name, label)]
+    if found:
+        links.setdefault(found[0], []).append(found[1])
+    data["links"] = {k: v for k, v in links.items() if v}
+    _save_link_index(data)                       # if it was stale, the next load rebuilds it
+
+
+def _entry_path(entry: dict) -> Path:
+    return (PENDING_DIR if entry.get("folder") == "pending" else NOTES_DIR) / entry["file"]
+
+
 def find_note_by_source(url: str) -> Path | None:
-    """Return the existing note for this reel link, if we already made one."""
+    """The newest existing note for this video, if we already made one."""
     if not url:
         return None
-    target = normalise_url(url)
-    for folder in (NOTES_DIR, PENDING_DIR):       # also the notes waiting on this PC
-        if not folder.exists():
-            continue
-        for note in sorted(folder.glob("*.md")):
-            for line in note.read_text(encoding="utf-8").splitlines()[:8]:
-                if line.startswith("- Source: ") and normalise_url(line[10:].strip()) == target:
-                    return note
-    return None
+    entries = load_link_index()["links"].get(normalise_url(url), [])
+    paths = [_entry_path(e) for e in sorted(entries, key=lambda e: e["saved"], reverse=True)]
+    return next((p for p in paths if p.is_file()), None)
+
+
+SHORT_NOTE_SECTIONS = ("Summary", "Key points", "Resources", "Action items")
+
+
+def short_note(text: str) -> str:
+    """The title plus Summary, Key points, Resources and Action items (no transcript or screen text)."""
+    lines = text.splitlines()
+    keep, out = False, lines[:1]
+    for line in lines[1:]:
+        if line.startswith("## "):
+            keep = line[3:].strip() in SHORT_NOTE_SECTIONS
+        if keep:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def duplicate_notes() -> list[tuple[str, list[dict]]]:
+    """Videos with more than one note: [(video key, [{'file', 'saved', 'folder'}...])]."""
+    links = load_link_index()["links"]
+    dupes = [(k, sorted(v, key=lambda e: e["saved"])) for k, v in links.items() if len(v) > 1]
+    return sorted(dupes, key=lambda d: d[1][-1]["saved"], reverse=True)
 
 
 def slide_total(data: dict) -> int:
@@ -1366,13 +1474,13 @@ def write_note_file(name: str, text: str, keep_existing: bool = True) -> Path:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(NOTES_DIR, name) if keep_existing else NOTES_DIR / name
         path.write_text(text, encoding="utf-8")
-        return path
     except OSError as exc:
         PENDING_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(PENDING_DIR, name) if keep_existing else PENDING_DIR / name
         path.write_text(text, encoding="utf-8")
         _log_notes(f"notes folder not available ({exc!r}). Saved {path.name} in {PENDING_DIR} for now")
-        return path
+    add_to_link_index(path)
+    return path
 
 
 def pending_notes() -> list[Path]:
@@ -1406,6 +1514,7 @@ def sync_pending() -> int:
         moved += 1
     if moved:
         _log_notes(f"moved {moved} note(s) from {PENDING_DIR} to {NOTES_DIR}")
+        rebuild_link_index()                      # their folder changed (and maybe their name)
     return moved
 
 

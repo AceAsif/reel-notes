@@ -224,7 +224,8 @@ def test_slide_summary():
     ("https://www.youtube.com/shorts/abcDEF12345", "https://youtu.be/abcDEF12345?si=x", True),
     ("https://www.youtube.com/watch?v=abcDEF12345&t=3", "https://m.youtube.com/shorts/abcDEF12345", True),
     ("https://www.youtube.com/watch?v=abcDEF12345", "https://www.youtube.com/watch?v=zzzzzzzzzzz", False),
-    ("https://www.instagram.com/reel/ABC/?igsh=1", "https://www.instagram.com/reel/abc", True),
+    ("https://www.instagram.com/reel/ABC/?igsh=1", "https://www.instagram.com/reel/ABC", True),
+    ("https://www.instagram.com/reel/ABC/", "https://www.instagram.com/reel/abc/", False),  # IDs are case-sensitive
 ])
 def test_normalise_url(a, b, same):
     assert (p.normalise_url(a) == p.normalise_url(b)) is same

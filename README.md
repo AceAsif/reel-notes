@@ -35,7 +35,7 @@ Reel video ───────────────────────
 
 | Command | What it does |
 |---|---|
-| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok, Threads and X (video posts only, see below). If the link already has a note, the bot says "Already saved" with the note's title, file name, when it was saved and its folder, and shows Save again, Show old note and Cancel buttons |
+| *(send a reel link)* | Downloads the reel and makes a note. Works with Instagram, Facebook, YouTube Shorts, YouTube (videos up to 10 minutes), TikTok, Threads and X (video posts only, see below). If the video already has a note, nothing is downloaded: the bot says "Already saved" with the note's title, file name, when it was saved and its folder, and shows Save again, Show old note (summary, key points, resources and actions, with a Full note button) and Cancel buttons. Duplicates are found by video ID, so `/reel/`, `/reels/`, `/p/` and `/tv/` links to one Instagram post match, and tracking bits like `?igsh=` are ignored. Short links (`vm.tiktok.com`, share links) can't be opened offline, so they only match the same short link. The IDs are kept in `link_index.json` (private, not committed), which rebuilds itself from the notes' Source lines when notes are added, moved or deleted |
 | *(send a reel video)* | Makes a note from the video (add the link as caption to enable the duplicate check) |
 | *(send a carousel post link)* | Instagram posts with several slides (`instagram.com/p/...`): every slide (up to 10) is processed into **one** combined note: videos are transcribed and read, photos are read with OCR. Photo-only posts work too |
 | `/start` | Shows your Telegram user ID |
@@ -56,6 +56,7 @@ Reel video ───────────────────────
 | `/note 1` | Opens note 1 from your last `/search`, `/notes` or `/tag` (without the transcript) |
 | `/tags` | Lists all your tags with how many notes use each |
 | `/tools` | Lists the tools, models and repos in your notes: name, link (or "No repo found") and how many notes mention it. `/tools all` also shows courses, companies, languages and channels, with their type. The list is cleaned with `tool_catalog.json` (aliases, official links, a stoplist); saved notes are not changed |
+| `/dupes` | Lists videos that already have more than one note, with file names and dates. Nothing is deleted |
 | `/tag python` | Shows notes tagged `#python`. `/tag ai` also matches `#ai-tools` |
 | `/tag` | On its own: shows buttons for your 12 most-used tags; tap one to see its notes |
 | `/retag` | Adds tags to older notes saved before tags existed |

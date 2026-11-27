@@ -103,7 +103,8 @@ def test_short_test_tokens_are_fine(repo):
 
 def test_is_private():
     for name in [".env", "notes/a.md", "bot.log", "x/y.log", "n.redo", "cookies.txt",
-                 "reminders.json", "sent_jobs.json", "bot_state.json", "cleanup_undo.json"]:
+                 "reminders.json", "sent_jobs.json", "bot_state.json", "cleanup_undo.json",
+                 "link_index.json"]:
         assert pre.is_private(name), name
     for name in [".env.example", "bot.py", "docs/notes.md", "tests/test_bot.py"]:
         assert not pre.is_private(name), name
@@ -191,7 +192,7 @@ def test_force_delete_is_blocked(command):
     f"cat {DOT_ENV}", f"less ./{DOT_ENV}", f"type {DOT_ENV}", f"Get-Content {DOT_ENV}",
     f"python -c \"print(open('{DOT_ENV}').read())\"", f"cat backup/{DOT_ENV}.local",
     f"more C:\\x\\{DOT_ENV}", "cat cookies.txt", "tail -n 50 bot.log", "cat reminders.json",
-    "cat sent_jobs.json", "cat bot_state.json", "cat cleanup_undo.json", "ls notes/",
+    "cat sent_jobs.json", "cat bot_state.json", "cat cleanup_undo.json", "cat link_index.json", "ls notes/",
     "cat notes/2026-01-01_x.md", "copy x notes\\a.md",
 ])
 def test_private_files_in_a_command_are_blocked(command):
@@ -207,7 +208,7 @@ def test_a_blocked_commit_still_says_commit_blocked():
 def test_the_deny_rules_are_all_still_there():
     deny = json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["deny"]
     names = (DOT_ENV, ".env.local", "cookies.txt", "bot.log", "reminders.json", "sent_jobs.json",
-             "bot_state.json", "cleanup_undo.json")
+             "bot_state.json", "cleanup_undo.json", "link_index.json")
     for name in names:
         assert f"Read(./{name})" in deny and f"Edit(./{name})" in deny
     for name in names[2:]:
@@ -216,7 +217,9 @@ def test_the_deny_rules_are_all_still_there():
     for tool in ("cat", "type", "head", "tail", "grep", "rg"):
         assert f"Bash({tool} *{DOT_ENV}*)" in deny and f"Bash({tool} *notes/*)" in deny
     assert "Read(./notes/**)" in deny and "Edit(./notes/**)" in deny
-    assert len(deny) == 66
+    for tool in ("cat", "type", "head", "tail", "grep", "rg"):
+        assert f"Bash({tool} *link_index.json*)" in deny
+    assert len(deny) == 74
 
 
 # ---- graphify_guard.py --------------------------------------------------------------
