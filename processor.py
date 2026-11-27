@@ -1543,8 +1543,8 @@ def all_tools() -> list[tuple[str, str, int, str]]:
 def split_messages(lines: list[str], limit: int = 4000) -> list[str]:
     """Join lines into messages under Telegram's 4096-character limit."""
     messages, current = [], ""
-    for line in lines:
-        line = line[:limit]
+    pieces = (line[i:i + limit] for line in lines for i in range(0, max(len(line), 1), limit))
+    for line in pieces:                               # a long line (a transcript) is cut, not lost
         if current and len(current) + 1 + len(line) > limit:
             messages.append(current)
             current = line
