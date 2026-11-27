@@ -29,7 +29,7 @@ COMMIT_RE = re.compile(r"\bgit\s+(?:-[Cc]\s+\S+\s+)*commit\b")
 TRAILER_RE = re.compile(r"co-authored-by|claude-session", re.I)
 FORCE_ADD_RE = re.compile(r"\bgit\s+add\b[^;&|\n]*(?:\s-f\b|\s--force\b)")
 PRIVATE_NAMES = {".env", ".env.local", "cookies.txt", "bot.log", "reminders.json",
-                 "sent_jobs.json", "bot_state.json", "cleanup_undo.json"}
+                 "sent_jobs.json", "bot_state.json", "cleanup_undo.json", "link_index.json"}
 SECRET_RES = {
     "a Telegram bot token": re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
     "a GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
@@ -39,7 +39,7 @@ MAX_FILE_BYTES = 1_000_000
 # a private file named anywhere in a command (".env.example" is fine: it has no secrets)
 PRIVATE_IN_COMMAND_RE = re.compile(
     r"(?<![\w.-])(?:\.env(?:\.local)?|cookies\.txt|bot\.log|reminders\.json|sent_jobs\.json"
-    r"|bot_state\.json|cleanup_undo\.json)(?![\w.-])|(?<![\w.-])notes[/\\]", re.I)
+    r"|bot_state\.json|cleanup_undo\.json|link_index\.json)(?![\w.-])|(?<![\w.-])notes[/\\]", re.I)
 SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]+|\$\(|`")
 PREFIX_WORDS = {"sudo", "command", "builtin", "exec", "nohup", "time", "xargs", "env"}
 

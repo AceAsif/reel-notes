@@ -12,6 +12,7 @@ reminders.json
 sent_jobs.json
 cleanup_undo.json
 bot_state.json
+link_index.json
 
 .claude/settings.local.json
 tools-export.csv
