@@ -227,22 +227,46 @@ LINK_PATTERN = (r"https?://\S*(instagram\.com|facebook\.com|fb\.watch|"
                 r"(?<![\w-])threads\.(?:com|net)|(?<![\w-])(?:x|twitter)\.com)\S*")
 
 
+def saved_when(path: Path, text: str) -> str:
+    """When the note was saved: its Date line or file name (PC clock), else the file time in TIMEZONE."""
+    saved = processor._note_date(path, text.splitlines()[:12])
+    if saved is None:
+        saved = datetime.datetime.fromtimestamp(path.stat().st_mtime, TIMEZONE)
+    return f"{saved:%d %b %Y, %H:%M}"
+
+
+def saved_note_details(path: Path) -> tuple[str, str]:
+    """('📝 title / 📄 file / 🕒 saved ... / 📁 folder' text, saved date and time)."""
+    text = path.read_text(encoding="utf-8")
+    title = text.split("\n", 1)[0].lstrip("# ").strip() or path.stem
+    when = saved_when(path, text)
+    folder = "pending folder (waiting on this PC)" if processor.is_pending(path) else "notes folder"
+    return f"📝 {title}\n📄 {path.name}\n🕒 Saved {when}\n📁 In the {folder}", when
+
+
+SAVE_AGAIN_BUTTON = InlineKeyboardButton("💾 Save again", callback_data="again:yes")
+CANCEL_AGAIN_BUTTON = InlineKeyboardButton("Cancel", callback_data="again:no")
+
+
 async def already_saved(msg, url: str, context=None) -> bool:
-    """Reply and return True if this reel already has a note.
-    With context (a pasted link), offer a "Save again" button."""
+    """Reply and return True if this reel already has a note: which note, when, and where.
+    With context (a pasted link), offer Save again / Show old note / Cancel."""
     existing = processor.find_note_by_source(url)
     if not existing:
         return False
+    details, when = saved_note_details(existing)
     if context is None:                           # video or screenshots: the file can't be kept
         await msg.reply_text(
-            f"📌 Already saved: {existing.name}\n"
+            f"📌 Already saved\n{details}\n\n"
             "To make a fresh note, delete that file from the notes folder and send it again.")
         return True
-    context.user_data["save_again_url"] = url     # a URL can be longer than callback_data allows
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("💾 Save again", callback_data="again:yes"),
-                                     InlineKeyboardButton("Cancel", callback_data="again:no")]])
-    await msg.reply_text(f"📌 Already saved: {existing.name}\n"
-                         "Press Save again to make a new note anyway.", reply_markup=buttons)
+    context.user_data.update(save_again_url=url,  # a URL can be longer than callback_data allows
+                             save_again_path=str(existing), save_again_when=when)
+    buttons = InlineKeyboardMarkup([[SAVE_AGAIN_BUTTON,
+                                     InlineKeyboardButton("📖 Show old note", callback_data="again:show"),
+                                     CANCEL_AGAIN_BUTTON]])
+    await msg.reply_text(f"📌 Already saved\n{details}\n\nPress Save again to make a new note anyway.",
+                         reply_markup=buttons)
     return True
 
 
@@ -251,9 +275,26 @@ async def save_again_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     if not is_allowed(update):
         return
-    url = context.user_data.pop("save_again_url", "")
+    data = context.user_data
+    path = Path(data.get("save_again_path") or ".")
+    if query.data == "again:show":                # keep the link: Save again still works after this
+        if not path.is_file():
+            await query.edit_message_text(
+                f"⚠️ The old note was moved or is missing: {path.name}\n"
+                "Press Save again to make a new note.",
+                reply_markup=InlineKeyboardMarkup([[SAVE_AGAIN_BUTTON, CANCEL_AGAIN_BUTTON]]))
+            return
+        text = path.read_text(encoding="utf-8")
+        for part in processor.split_messages(text.splitlines()):
+            await query.message.reply_text(part, disable_web_page_preview=True)
+        return
+    url = data.pop("save_again_url", "")
+    data.pop("save_again_path", None)
+    when = data.pop("save_again_when", "")
     if query.data != "again:yes":
-        await query.edit_message_text("OK, kept the old note. Nothing downloaded.")
+        await query.edit_message_text(
+            f"Kept the old note: {path.name}, saved {when}. Nothing downloaded." if when
+            else "OK, kept the old note. Nothing downloaded.")
         return
     if not url:
         await query.edit_message_text("I lost that link. Send it again.")

@@ -773,32 +773,77 @@ def test_same_link_warns_with_save_again_button(tmp_path, monkeypatch, url):
     replies, downloads, data = run_link(tmp_path, monkeypatch, url)
     assert downloads == []                                  # nothing downloaded
     text, markup = replies[0]
-    assert text.startswith("📌 Already saved: 2026-11-14_2106_x.md")
-    assert markup.inline_keyboard[0][0].callback_data == "again:yes"
-    assert data["save_again_url"] == url
+    assert text.startswith("📌 Already saved\n📝 X\n📄 2026-11-14_2106_x.md\n"
+                           "🕒 Saved 14 Nov 2026, 21:06\n📁 In the notes folder")
+    assert [b.callback_data for b in markup.inline_keyboard[0]] == ["again:yes", "again:show", "again:no"]
+    assert data["save_again_url"] == url and data["save_again_when"] == "14 Nov 2026, 21:06"
+
+
+def test_already_saved_says_pending_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot.processor, "PENDING_DIR", tmp_path / "pending")
+    (tmp_path / "pending").mkdir()
+    (tmp_path / "pending" / "2026-11-20_0905_y.md").write_text(
+        "# Y\n- Source: https://www.instagram.com/reel/PEN/\n", encoding="utf-8")
+    replies, downloads, _ = run_link(tmp_path, monkeypatch, "https://www.instagram.com/reel/PEN/")
+    assert downloads == [] and "📁 In the pending folder" in replies[0][0]
 
 
 def press_save_again(monkeypatch, answer, user_data):
+    """Press a button on the warning. Returns (downloads, edits, sent messages)."""
     monkeypatch.setattr(bot, "ALLOWED_USER_ID", "")
-    downloads, edits = [], []
+    downloads, edits, sent = [], [], []
     async def fake_link(status, u): downloads.append(u)
     monkeypatch.setattr(bot, "note_from_link", fake_link)
-    async def edit(t): edits.append(t)
+    async def edit(t, reply_markup=None): edits.append((t, reply_markup))
+    async def send(t, **kw): sent.append(t)
     async def ok(): pass
-    query = types.SimpleNamespace(data=answer, answer=ok, edit_message_text=edit, message="status")
+    query = types.SimpleNamespace(data=answer, answer=ok, edit_message_text=edit,
+                                  message=types.SimpleNamespace(reply_text=send))
     upd = types.SimpleNamespace(callback_query=query, effective_user=types.SimpleNamespace(id=1))
     asyncio.run(bot.save_again_pressed(upd, types.SimpleNamespace(user_data=user_data)))
-    return downloads, edits
+    return downloads, edits, sent
 
 
-def test_save_again_downloads(monkeypatch):
-    downloads, _ = press_save_again(monkeypatch, "again:yes", {"save_again_url": "https://x.com/a/status/1"})
+def saved_data(tmp_path, body="# X\n- Source: https://x.com/a/status/1\n"):
+    note = tmp_path / "2026-11-14_2106_x.md"
+    note.write_text(body, encoding="utf-8")
+    return {"save_again_url": "https://x.com/a/status/1", "save_again_path": str(note),
+            "save_again_when": "14 Nov 2026, 21:06"}
+
+
+def test_save_again_downloads(tmp_path, monkeypatch):
+    downloads, _, _ = press_save_again(monkeypatch, "again:yes", saved_data(tmp_path))
     assert downloads == ["https://x.com/a/status/1"]
 
 
-def test_save_again_cancel_downloads_nothing(monkeypatch):
-    downloads, edits = press_save_again(monkeypatch, "again:no", {"save_again_url": "https://x.com/a/status/1"})
-    assert downloads == [] and "Nothing downloaded" in edits[0]
+def test_save_again_cancel_says_which_note_was_kept(tmp_path, monkeypatch):
+    data = saved_data(tmp_path)
+    downloads, edits, _ = press_save_again(monkeypatch, "again:no", data)
+    assert downloads == [] and data == {}
+    assert edits[0][0] == "Kept the old note: 2026-11-14_2106_x.md, saved 14 Nov 2026, 21:06. Nothing downloaded."
+
+
+def test_show_old_note_sends_it_and_keeps_save_again(tmp_path, monkeypatch):
+    data = saved_data(tmp_path)
+    downloads, edits, sent = press_save_again(monkeypatch, "again:show", data)
+    assert downloads == [] and edits == [] and sent == ["# X\n- Source: https://x.com/a/status/1"]
+    assert data["save_again_url"]                           # Save again still works after this
+
+
+def test_show_old_note_splits_a_long_note(tmp_path, monkeypatch):
+    body = "# Long\n## Transcript\n" + "word " * 2000 + "\n" + "\n".join(f"- point {i}" for i in range(400))
+    _, _, sent = press_save_again(monkeypatch, "again:show", saved_data(tmp_path, body))
+    assert len(sent) > 1 and all(len(s) <= 4096 for s in sent)
+    assert "".join(sent).replace("\n", "") == body.replace("\n", "")   # nothing lost
+
+
+def test_show_old_note_when_file_is_missing_offers_save_again(tmp_path, monkeypatch):
+    data = saved_data(tmp_path)
+    Path(data["save_again_path"]).unlink()
+    _, edits, sent = press_save_again(monkeypatch, "again:show", data)
+    text, markup = edits[0]
+    assert sent == [] and "moved or is missing: 2026-11-14_2106_x.md" in text
+    assert markup.inline_keyboard[0][0].callback_data == "again:yes"
 
 
 def test_tools_command_says_when_there_are_none(monkeypatch):
