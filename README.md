@@ -6,7 +6,7 @@ Send the bot a **reel link** or a **reel video**, and about a minute later you g
 
 - a title, category and short summary
 - key points
-- resources (GitHub repos, tools, links); anything without a real URL says "No repo found"
+- resources: only named software, apps, AI models and repos, cleaned with `tool_catalog.json` (one name per tool, official links, no generic terms). A link is kept only if the video showed it; otherwise "No link found"
 - action items you can tick off
 
 Everything runs **free and locally** on your own computer. No paid APIs.
@@ -88,7 +88,7 @@ Reel video ───────────────────────
 - Claude mem https://github.com/thedotmack/claude-mem  ⭐ 115.6k — Persistent Context Across Sessions...
 ```
 
-If there is no confident match, the note says "No repo found" (no search link). This uses the free GitHub API without a login. Optionally set `GITHUB_TOKEN` in `.env` for higher rate limits.
+If there is no confident match, the note says "No link found" (no search link). This uses the free GitHub API without a login. Optionally set `GITHUB_TOKEN` in `.env` for higher rate limits.
 
 Every new note gets 3–6 topic tags (e.g. `#python #ai-tools #github`). The AI is shown your existing tags so it reuses them, which keeps topics grouped together.
 
