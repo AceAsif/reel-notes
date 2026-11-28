@@ -110,8 +110,7 @@ def test_only_the_ai_runs_and_it_gets_the_same_text(notes, monkeypatch, capsys):
     for part in ("Strix finds security bugs", "github.com/usestrix/strix", "Comment STRIX for the link"):
         assert part in prompts[0]
     assert set(data["timings"]) == {"ai"} and "fast redo" in capsys.readouterr().out
-    assert not path.exists() and (notes / "old" / path.name).exists()          # old note kept in old/
-    assert new.exists() and new.parent == notes
+    assert new == path and sorted(notes.rglob("*.md")) == [path]              # same file, no second copy
 
 
 def test_date_source_creator_language_slides_and_tags_are_kept(notes, monkeypatch):
@@ -119,7 +118,7 @@ def test_date_source_creator_language_slides_and_tags_are_kept(notes, monkeypatc
     fake_ai(monkeypatch, tags=("ai-tools", "other"))
     new, _ = p.redo_from_saved(path)
     text = new.read_text(encoding="utf-8")
-    assert new.name == "2026-10-05_0930_strix-ai-security-testing.md"            # the old date
+    assert new == path                                                          # same file name and date
     assert text.startswith("# Strix: AI Security Testing\n")                       # the new AI title
     for line in ("- Date: 2026-10-05 09:30", "- Source: https://www.instagram.com/reel/ABC/",
                  "- Creator: Ann Lee (@ann) https://www.instagram.com/ann",
@@ -200,7 +199,7 @@ def test_another_note_with_the_same_name_is_never_overwritten(notes, monkeypatch
     other.write_text("# another note, do not touch\n", encoding="utf-8")
     fake_ai(monkeypatch)
     new, _ = p.redo_from_saved(path)
-    assert new.name == "2026-10-05_0930_strix-ai-security-testing_2.md"
+    assert new == path and not (notes / "2026-10-05_0930_strix-ai-security-testing_2.md").exists()
     assert other.read_text(encoding="utf-8") == "# another note, do not touch\n"
 
 
@@ -285,7 +284,8 @@ def test_the_fast_button_makes_the_note(notes, monkeypatch):
     message = press(ctx(redo_path=str(path)), "redo:fast")
     assert "no download" in message.edits[0]
     assert message.edits[-1].startswith("📝 Strix: AI Security Testing") and "⏱" in message.edits[-1]
-    assert (notes / "old" / path.name).exists()
+    assert path.read_text(encoding="utf-8").startswith("# Strix: AI Security Testing")
+    assert not (notes / "old").exists()
 
 
 def test_the_fast_button_reports_a_failure_and_keeps_the_note(notes, monkeypatch):

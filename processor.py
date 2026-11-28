@@ -543,6 +543,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     data["resources"] = drop_link_borrowers(data["resources"], said)
     data["resources"] = mark_unverified_names(data["resources"], transcript + "\n" + screen)
     data["resources"] = clean_resources(data["resources"])     # same catalog rules as /tools
+    data["resources"] = fold_repo_links(data["resources"])
     data["resources"] = enrich_with_github(data["resources"], data["category"],
                                            transcript + "\n" + screen)
     ensure_action(data)
@@ -600,6 +601,31 @@ def drop_link_borrowers(resources: list, said_text: str) -> list:
         if len(group) > 1 and spoken:
             drop |= {id(r) for r in group if r not in spoken}
     return [r for r in resources if id(r) not in drop]
+
+
+def fold_repo_links(resources: list) -> list:
+    """Links inside one GitHub repo ('SKILL.md -> github.com/a/b/blob/main/SKILL.md') join that
+    repo's line as "also:" links instead of being a line of their own. The repo's own link wins."""
+    out, repos = [], {}
+    for r in resources:
+        link = str(r.get("link", "")).strip() if isinstance(r, dict) else ""
+        m = GITHUB_REPO_RE.search(link)
+        if not m:
+            out.append(r)
+            continue
+        key = f"{m.group(1)}/{m.group(2).removesuffix('.git')}".lower()
+        is_root = not link[m.end():].strip("/")
+        main = repos.get(key)
+        if main is None:
+            repos[key] = r
+            out.append(r)
+            continue
+        if is_root and str(main["link"]).rstrip("/") != link.rstrip("/"):   # the repo itself: it leads
+            main.setdefault("also", []).insert(0, main["link"])
+            main.update(name=r["name"], link=link)
+        elif link.rstrip("/") not in [main["link"].rstrip("/"), *main.get("also", [])]:
+            main.setdefault("also", []).append(link)
+    return out
 
 
 def collapse_repeats(text: str) -> str:
@@ -824,6 +850,8 @@ def resource_line(r, category: str = "") -> str:
     if r.get("unverified"):
         name += " (unverified)"
     line = f"{name} {link}".strip()
+    if r.get("also"):                             # links inside the same repo (see fold_repo_links)
+        line += " · also: " + ", ".join(r["also"])
     if "stars" in r:
         line += f"  ⭐ {format_stars(int(r['stars']))}"
         extra = []
@@ -2930,9 +2958,6 @@ def pick_resurface(today: date | None = None, min_age_days: int = 7,
 
 # ---- /redo: make a note again ---------------------------------------------
 
-OLD_DIR_NAME = "old"
-
-
 def note_source(path: Path) -> str:
     for line in path.read_text(encoding="utf-8").splitlines()[:10]:
         if line.startswith("- Source: "):
@@ -2953,16 +2978,20 @@ def find_note_for_redo(query: str = "") -> Path | None:
     return None
 
 
-def archive_note(path: Path) -> Path:
-    """Move an old note into NOTES_DIR/old/ (kept, but hidden from /todo, /search...)."""
-    old_dir = NOTES_DIR / OLD_DIR_NAME
-    old_dir.mkdir(exist_ok=True)
-    name = path.with_suffix(".md")
-    target = old_dir / name.name
-    if target.exists():
-        target = old_dir / f"{name.stem}_{datetime.now():%H%M%S}.md"
-    path.replace(target)
-    return target
+def replace_note(old: Path, old_text: str, new: Path) -> Path:
+    """/redo: put the new note's text into the old note's file (same name, same place, so
+    there is never a second copy) and keep the old done/skipped to-dos. The just-saved new
+    file is removed. If anything fails, the old text is put back."""
+    new_text = new.read_text(encoding="utf-8")
+    try:
+        old.write_text(new_text, encoding="utf-8")
+        carry_over(old, finished_items(old_text.splitlines()))
+    except Exception:
+        old.write_text(old_text, encoding="utf-8")
+        raise
+    if new.resolve() != old.resolve():
+        new.unlink(missing_ok=True)     # the link index sees the file list change and rebuilds
+    return old
 
 
 # ---- /redo fast: make a note again from the text saved in it (no download) ---------------
@@ -3097,12 +3126,12 @@ def carry_over(path: Path, finished: list[list[str]]) -> None:
 
 
 def redo_from_saved(path: Path) -> tuple[Path, dict]:
-    """/redo fast: make the note again from its saved text. Returns (new note, data).
-    The old note moves to old/. If anything fails, the old note stays where it was."""
+    """/redo fast: make the note again from its saved text, in the same file. Returns (note, data).
+    If anything fails, the old note stays as it was."""
     saved = saved_inputs(path)
     if saved is None:
         raise RedoNotPossible(MSG_NO_SAVED_TEXT)
-    old_lines = path.read_text(encoding="utf-8").splitlines()
+    old_text = path.read_text(encoding="utf-8")
     started = time.perf_counter()
     data = summarise(saved["transcript"], saved["screen"], saved["caption"])   # the only slow step
     timings = {"ai": time.perf_counter() - started}
@@ -3110,20 +3139,16 @@ def redo_from_saved(path: Path) -> tuple[Path, dict]:
                 photo_count=saved["photo_count"], creator=saved["creator"], timings=timings)
     if saved["tags"]:
         data["tags"] = saved["tags"]                 # keep your tags (you may have renamed them)
-    archived = archive_note(path)                    # first, so the new note may take its name
-    new_path = None
+    new_path = save_note(data, saved["transcript"], saved["screen"], saved["source"],
+                         saved["language"], saved["caption"], saved_at=saved["date"],
+                         keep_existing=True)        # a _2 name next to the old note, for a moment
     try:
-        new_path = save_note(data, saved["transcript"], saved["screen"], saved["source"],
-                             saved["language"], saved["caption"], saved_at=saved["date"],
-                             keep_existing=True)
-        carry_over(new_path, finished_items(old_lines))
+        replace_note(path, old_text, new_path)
     except Exception:
-        if new_path is not None and new_path.exists():
-            new_path.unlink()
-        archived.replace(path)                       # put the old note back
+        new_path.unlink(missing_ok=True)            # save_note never overwrites, so this is never `path`
         raise
     log_timing(f"fast redo, {path.name}", timings)
-    return new_path, data
+    return path, data
 
 
 # ---- yt-dlp auto-update -----------------------------------------------------

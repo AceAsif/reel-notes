@@ -288,9 +288,11 @@ def run_redo_button(tmp_path, monkeypatch, answer, works):
     return note, edits
 
 
-def test_redo_success_archives_old(tmp_path, monkeypatch):
+def test_redo_success_replaces_the_note_in_the_same_file(tmp_path, monkeypatch):
     note, _ = run_redo_button(tmp_path, monkeypatch, "redo:yes", True)
-    assert not note.exists() and (tmp_path / "old" / note.name).exists()
+    assert note.read_text(encoding="utf-8").startswith("# X new")
+    assert [f.name for f in tmp_path.glob("*.md")] == [note.name]          # one file
+    assert not (tmp_path / "old").exists()                                  # no old/ copy
 
 
 def test_redo_failure_restores_old(tmp_path, monkeypatch):

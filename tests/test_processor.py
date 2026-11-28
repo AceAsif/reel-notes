@@ -590,7 +590,7 @@ def test_thinking_off_only_for_qwen3(monkeypatch):
     assert p.strip_thinking("<think>hmm</think>{\"a\":1}") == '{"a":1}'
 
 
-def test_find_note_for_redo_and_archive(tmp_path, monkeypatch):
+def test_find_note_for_redo(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
     (tmp_path / "2026-11-14_2106_llm-wiki.md").write_text("# LLM Wiki\n- Source: https://www.instagram.com/reel/A/\n", encoding="utf-8")
     (tmp_path / "2026-11-15_0040_ai-job.md").write_text("# AI Job Market\n- Source: screenshot\n", encoding="utf-8")
@@ -598,11 +598,22 @@ def test_find_note_for_redo_and_archive(tmp_path, monkeypatch):
     note = p.find_note_for_redo("llm wiki")
     assert p.note_source(note) == "https://www.instagram.com/reel/A/"
     assert p.find_note_for_redo("nothing here") is None
-    hidden = note.with_suffix(".redo")
-    note.replace(hidden)
-    moved = p.archive_note(hidden)
-    assert moved == tmp_path / "old" / "2026-11-14_2106_llm-wiki.md" and moved.exists()
-    assert len(list(tmp_path.glob("*.md"))) == 1                         # hidden from /todo etc.
+
+
+def test_replace_note_keeps_the_file_and_done_items_and_rolls_back(tmp_path):
+    old = tmp_path / "2026-11-14_2106_a.md"
+    old_text = "# A\n\n## Action items\n- [x] Old done thing ✅ 2026-11-15\n"
+    old.write_text(old_text, encoding="utf-8")
+    new = tmp_path / "2026-11-14_2106_a_2.md"
+    new.write_text("# A new\n\n## Action items\n- [ ] New thing\n", encoding="utf-8")
+    assert p.replace_note(old, old_text, new) == old
+    text = old.read_text(encoding="utf-8")
+    assert text.startswith("# A new") and "- [x] Old done thing" in text and "- [ ] New thing" in text
+    assert not new.exists()
+    broken = tmp_path / "missing.md"                                       # reading it fails
+    with pytest.raises(OSError):
+        p.replace_note(old, text, broken)
+    assert old.read_text(encoding="utf-8") == text                         # nothing changed
 
 
 def test_update_ytdlp(monkeypatch):
@@ -1415,3 +1426,34 @@ def test_screen_only_name_borrowing_another_resources_link_is_dropped():
 ])
 def test_transcript_that_repeats_itself_is_kept_once(text, expected):
     assert p.collapse_repeats(text) == expected
+
+
+def test_links_inside_a_repo_join_the_repo_line():
+    res = [{"name": "Hallmark", "link": "https://github.com/Nutlope/hallmark"},
+           {"name": "SKILL.md", "link": "https://github.com/Nutlope/hallmark/blob/main/SKILL.md"},
+           {"name": "Examples", "link": "https://github.com/nutlope/hallmark/tree/main/examples/"},
+           {"name": "Strix", "link": "https://github.com/usestrix/strix"},
+           {"name": "Site", "link": "https://hallmark.dev"}]
+    out = p.fold_repo_links(res)
+    assert [r["name"] for r in out] == ["Hallmark", "Strix", "Site"]
+    assert out[0]["also"] == ["https://github.com/Nutlope/hallmark/blob/main/SKILL.md",
+                              "https://github.com/nutlope/hallmark/tree/main/examples/"]
+    assert p.resource_line(out[0]) == ("Hallmark https://github.com/Nutlope/hallmark · also: "
+                                       "https://github.com/Nutlope/hallmark/blob/main/SKILL.md, "
+                                       "https://github.com/nutlope/hallmark/tree/main/examples/")
+
+
+def test_the_repo_itself_leads_even_when_a_deep_link_came_first():
+    out = p.fold_repo_links([{"name": "SKILL.md", "link": "https://github.com/a/b/blob/main/SKILL.md"},
+                             {"name": "b", "link": "https://github.com/a/b"},
+                             {"name": "b again", "link": "https://github.com/a/b/"}])
+    assert out == [{"name": "b", "link": "https://github.com/a/b",
+                    "also": ["https://github.com/a/b/blob/main/SKILL.md"]}]
+
+
+def test_tools_still_reads_a_line_with_also_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "NOTES_DIR", tmp_path)
+    (tmp_path / "a.md").write_text("# A\n\n## Resources\n- Hallmark https://github.com/Nutlope/hallmark"
+                                   " · also: https://github.com/Nutlope/hallmark/blob/main/SKILL.md\n",
+                                   encoding="utf-8")
+    assert p.all_tools() == [("Hallmark", "https://github.com/Nutlope/hallmark", 1, "repo")]
