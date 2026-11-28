@@ -1,6 +1,6 @@
 # Reel Notes: Handover Document
 
-Last updated: 2026-11-21. This document explains what the bot does, how it works,
+Last updated: 2026-11-28 (see section 13 for everything since 23 Nov). This document explains what the bot does, how it works,
 and where it is weak, so a new reader (human or AI) can understand it fast and
 suggest improvements. Read it together with `README.md` (user guide) and the code.
 
@@ -17,15 +17,15 @@ act on them. The goal is not only to store notes but to turn them into actions.
 
 **Hard constraints (do not break these):**
 - 100% **free and local**. No paid APIs. AI runs on local Ollama (`qwen3:8b`).
-- **Private**. Notes live in a Google Drive folder. Never commit `.env`, `notes/`,
-  `bot.log`, `cookies.txt`, `reminders.json` or `sent_jobs.json` (all in `.gitignore`).
+- **Private**. Notes live in a synced folder outside the repo (`NOTES_DIR` in `.env`). Never read or
+  commit the private files listed in `CLAUDE.md` (all in `.gitignore`).
 - Only the allowed user can use it (`ALLOWED_USER_ID`).
 - Bot messages must stay short and in simple English.
 
 ## 2. Environment
 
-- Windows PC with an 8 GB graphics card (models must fit in 8 GB). Python 3.12 venv.
-- Notes folder: a Google Drive folder (Google Drive for desktop), read on the phone.
+- A normal Windows PC with a mid-size graphics card (the local models must fit in it). Python 3.12 venv.
+- Notes folder: a synced cloud folder, read on the phone.
 - Starts with Windows through a tray icon (`tray.py`). Runs only while the PC is on.
 - Repo: public, MIT. Workflow: feature branch, then a pull request that the maintainer
   squash-merges. Plain commit messages.
@@ -50,15 +50,17 @@ processor.py ── all logic (no Telegram code)
 
 | File | Role |
 |---|---|
-| `bot.py` (~1280 lines) | Telegram layer: handlers, inline buttons, jobs, formatting replies |
-| `processor.py` (~1770 lines) | Everything else (see section 5) |
+| `bot.py` (~1900 lines) | Telegram layer: handlers, inline buttons, jobs, formatting replies |
+| `processor.py` (~3200 lines) | Everything else (see section 5) |
 | `tray.py` | Windows tray icon: start/stop the bot, open log |
-| `tests/` | pytest, 432 tests (stubs for pytesseract and faster_whisper) |
+| `tests/` | pytest, about 680 tests (stubs for pytesseract and faster_whisper, Ollama mocked) |
+| `tools/chat_sim.py` | Chat simulator: real handlers, sample notes, temp files, local Ollama only |
+| `tool_catalog.json` | Tool aliases, official links, stoplist and types for `/tools` and new notes |
 | `PROGRESS.md` | Checkpoint file for the current task (see "checkpoint-and-report" workflow) |
 | `.env` | Settings (see section 8) |
 
 **No database.** State = Markdown files + `reminders.json` + `sent_jobs.json` (which
-scheduled messages were already sent). Every command re-reads and
+scheduled messages were already sent) + `link_index.json` (video ID to note, rebuilt from the notes). Every command re-reads and
 parses the notes folder. Simple and easy to inspect/edit by hand, but it is O(notes)
 per command and has no index.
 
@@ -148,7 +150,7 @@ reminders still work (`legacy_action_id`).
 - **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
   actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
   The Sunday review hints at it above 30 open actions.
-- **Notes folder missing** (Google Drive not running): the note is saved in `notes/pending` on the PC
+- **Notes folder missing** (the sync app is not running): the note is saved in `notes/pending` on the PC
   and moved back by `sync_pending` (the 5-minute check) when the folder is back. Nothing is lost.
 - **One idea, one to-do:** a habit that says the same as an action is merged (`merge_habit_and_actions`);
   old notes are handled by `/cleanup`.
@@ -188,7 +190,7 @@ These are the real pain points and honest gaps. Good places to start.
 1. **Note quality depends on one 8B local model.** It can still mislabel, merge wrong
    details, or miss the main point (a recurring issue with long roadmap-style reels).
    There is no automatic quality check or second pass.
-2. **Whisper runs on CPU** (`device="cpu"`, int8) even though the PC has an 8 GB graphics card.
+2. **Whisper runs on CPU** (`device="cpu"`, int8) even though the PC has a graphics card.
    The timing logs show it is the biggest step: "listen" is about 11 to 37 s of 30 to 61 s per
    reel. GPU use is untested.
 3. **OCR is noisy** (see "On-screen text" in notes). Frame sampling every 2 s is a blunt
@@ -204,7 +206,8 @@ These are the real pain points and honest gaps. Good places to start.
    is back (a missed daily nudge only on the same day).
 8. **Instagram/Facebook changes break yt-dlp** often; cookies are needed sometimes. **Threads**
    gave no video from its public page in a real test (login wall or empty page).
-9. **Resources for non-code topics** are only Google search links (no real verification).
+9. (Fixed) Resources no longer get Google search links. A link stays only if the video showed it or
+   the catalog has it; otherwise "No link found".
 10. **Security:** the bot token and cookies are local files; bot trusts `ALLOWED_USER_ID`
     only. No rate limiting; prompt-injection through video text into the notes/chat
     prompt is not specifically handled.
@@ -227,7 +230,7 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
   "save one, do one" after a new note, a nudge with the link and key points, 🤖 Get prompt
   (`/prompt`), "What did you learn?" after a Done (shown in `/month`), habit and action merged into
   one to-do, `/redo fast` (rebuild a note from its saved text, no download), stable `/todo` numbers, catch-up of missed messages when the PC starts.
-- **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when Google Drive
+- **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when the synced folder
   is missing (and moved back later), search that keeps short words (ai, uv), `/usage`, rules and
   hooks for Claude Code (`CLAUDE.md`, `.claude/`).
 
@@ -240,7 +243,7 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
 | 3 | **`/review` old notes.** One old note at a time with Keep / Drop buttons. | 🟡 | You choose your list, 5 notes per round. |
 | 4 | **Bring back an "Other idea".** `/note` shows a button to move an idea into the to-do list. | 🟢 | Extra ideas are plain bullets. You cannot bring one back from Telegram. |
 | 5 | **7-day habit check** for 🧠 actions. | 🟡 | 32 of the 110 open actions are habits. A habit is not a one-time tick. |
-| 6 | **`/tools` list.** All tools and repos from all notes, with the number of notes that mention each. | 🟢 | A tool in 4 reels is a strong sign to try it first. |
+| 6 | (Done 2026-11-26) **`/tools` list.** All tools and repos from all notes, with the number of notes that mention each. | 🟢 | A tool in 4 reels is a strong sign to try it first. |
 | 7 | **"You already saved this topic".** One line under a new note when older notes share 2 or more tags. | 🟢 | Saving the same idea again and again is a hint to act on it. |
 | 8 | **Topic cheat sheet** (`/topic claude`). Merge the key points of one tag into one page. | 🟡 | Ten small notes become one page. Limit to 8 notes and show the sources. |
 | 9 | **`/add`.** Add your own action. | 🟢 | One list for everything. Low rank: your problem is doing, not adding. |
@@ -251,13 +254,13 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
 - README: say that Threads video may not work. 🟢
 - Speed: "listen" (Whisper on the CPU) is the biggest step, about 11 to 37 s of 30 to 61 s per reel.
   OCR is only 2 to 9 s. Test Whisper on the GPU (`WHISPER_DEVICE` with a fallback to CPU).
-  It shares the 8 GB with Ollama, so measure first. 🟡
+  It shares the graphics card with Ollama, so measure first. 🟡
 - After 2 weeks of `/usage`: hide the commands nobody uses. Candidates: `/ask` (chat does the same),
   `/high` `/normal` `/low`, `/tags`, `/retag`, `/renametag`, `/file`, `/update`. Decide from the counts.
-- Skip junk resources that are file names (.xlsx). 🟢
+- (Done) Skip junk resources that are file names (.xlsx).
 - Show `/health` in the weekly review. 🟢
 - Backup copy before `/renametag` and `/retag`. 🟢
-- Check: send one Facebook share link again. The failure on 2026-11-19 was the missing Google Drive,
+- Check: send one Facebook share link again. The failure on 2026-11-19 was the missing notes folder,
   not Facebook.
 - Check: paste the BotFather list (`botfather-commands.txt`) into BotFather when commands are added.
 
@@ -279,7 +282,8 @@ These add more things to save or are about remembering. They do not fix "I do no
 python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt
 copy .env.example .env      # fill in token and ALLOWED_USER_ID
 python bot.py               # or run tray.py
-pip install -r requirements-dev.txt ; python -m pytest      # 432 tests, no network needed
+pip install -r requirements-dev.txt ; python -m pytest -q   # about 680 tests, no network needed
+python tools/chat_sim.py --file tests/chat_scenarios.txt     # chat check with the local model
 ```
 
 Tests use stubs for `pytesseract` and `faster_whisper`; Ollama and GitHub calls are
@@ -293,3 +297,77 @@ mocked. Always run the tests before committing.
 - Always say which folder each file goes in and give a suggested commit message.
 - Keep replies simple, short, and in plain English.
 - Never add paid services. Prefer free/local options and explain trade-offs.
+
+## 13. Handover 2026-11-28
+
+### Where everything lives
+
+| What | Where |
+|---|---|
+| Telegram layer (handlers, buttons, jobs, chat routing) | `bot.py` |
+| All logic: pipeline, note format, `/tools` cleaning, link index, chat intent and task matching | `processor.py` |
+| Threads links (public page, one request) | `threads_link.py` |
+| Tray icon | `tray.py` |
+| Tool aliases, official links, stoplist, types | `tool_catalog.json` |
+| Chat simulator (sample notes, temp files, local Ollama only) | `tools/chat_sim.py` |
+| Chat scenarios for the simulator | `tests/chat_scenarios.txt` |
+| Tests (no network) | `tests/` (`conftest.py` keeps every private file in a temp folder and blocks Ollama) |
+| Rules for Claude Code, hooks | `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/` |
+| BotFather command list | `botfather-commands.txt` |
+| Current task checkpoint | `PROGRESS.md` (rewritten for each branch) |
+| Private, never read or committed | `.env`, the notes folder, `bot.log`, `cookies.txt`, `reminders.json`, `sent_jobs.json`, `bot_state.json`, `cleanup_undo.json`, `link_index.json` |
+
+### Working rules (short version of `CLAUDE.md`)
+
+- One feature branch per task, small commits, push. Never merge; the owner squash-merges.
+- Plain one-line commit messages, no trailer lines. `gh pr create` is blocked; give the
+  `pull/new/<branch>` link or use `gh api`.
+- `python -m pytest -q` before every commit (the hook blocks a commit when a test fails).
+- After changing chat or intent code: `python tools/chat_sim.py --file tests/chat_scenarios.txt`.
+- Never read private files or the real notes. The hook blocks any command that names one.
+- A new command: update `/start`, `README.md`, `botfather-commands.txt`, and add tests.
+- Free and local only. Simple English. Say "I'm not sure" instead of guessing.
+
+### Done since 23 Nov (pull request numbers)
+
+- #26 The real yt-dlp error is shown when a download fails. #27 Hooks work without graphify.
+- #28 Tool names not in the transcript, OCR or caption are marked "(unverified)".
+- #29 No Google or GitHub search links in resources.
+- #30, #35 "Already saved" warning: title, file, saved time, folder; Save again, Show old note (short,
+  with a Full note button), Cancel.
+- #31, #32, #34 `/tools` and `/tools all`: totals, counts per type, cleaned with `tool_catalog.json`
+  (aliases, stoplist, official links, bad links dropped, "X GitHub" folded into X).
+- #36 Duplicate links found by video ID (Instagram /reel/ /reels/ /p/ /tv/, TikTok, YouTube, Facebook,
+  X, Threads) through `link_index.json`, which rebuilds itself. `/dupes` lists videos saved twice.
+- #37 New notes: resources cleaned with the catalog; a link stays only if the video showed it.
+- #38 Chat can do tasks: "I finished the X task" or "skip the X one" finds the action and asks
+  Yes / Not this one / Cancel. "show my todo list", stats, tools, dupes, find and open note run the
+  commands. Chat replies may not claim they changed anything. Intent AI is asked only when the message
+  has a task word. Chat simulator added.
+- #39 A new note always gets an action: the AI is asked again, then a default ("Try <tool>: <link>"
+  or "Review this note") with a warning. Shared-link resources and repeated transcripts fixed.
+
+Pushed, not merged yet (owner to merge):
+- `fix/chat-task-matching`: task matching looks at the whole note (title, file name, summary, tags,
+  resources); several matches or none show action buttons. main is merged into it.
+- `fix/redo-and-repo-links`: `/redo` writes into the same file (no `old/` copy) and keeps done and
+  skipped actions; links inside a GitHub repo join that repo's line as "also:".
+
+### Open to-dos
+
+| To-do | Effort |
+|---|---|
+| Save notes and state files safely: write to a temp file, then replace (a crash mid-save can empty a note or lose all reminders) | small |
+| Paste the new `botfather-commands.txt` into BotFather (`/tools`, `/dupes`) | small |
+| Install `gh` on the PC so pull requests can be opened from Claude Code | small |
+| Short links (`vm.tiktok.com`, share links) only match the same short link | medium |
+| "Not this one" and the pick list show at most 5 actions; a common word (e.g. "Claude") can fill them | medium |
+| A task message without a task word ("I sent the card") goes to normal chat, no buttons | medium |
+| Test Whisper on the graphics card (it is the slowest step) | medium |
+| Pick 3 for this week; keep or drop after 3 nudges; `/review` old notes (section 10) | medium to big |
+| Long video processing may block other messages until it is done (not tested) | big |
+
+### First message for the new chat
+
+"Read `CLAUDE.md`, then `docs/HANDOVER.md` section 13, then `PROGRESS.md`. Check which open branches
+are merged (`git branch -r --no-merged origin/main`). Then tell me the open to-dos and wait."
