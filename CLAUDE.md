@@ -14,6 +14,8 @@ items, and helps the user DO the actions. Read `docs/HANDOVER.md` first, then `R
 - Update `PROGRESS.md` after each step.
 - Run `python -m pytest -q` after each step and before each commit. All tests must pass.
   The tests need no network.
+- After changing chat or intent code, run the chat simulator with the real local model:
+  `python tools/chat_sim.py --file tests/chat_scenarios.txt`. It uses sample notes and temp files.
 - A hook (`.claude/hooks/pre_commit_check.py`) blocks `git commit` when a test fails, a
   private file is staged, a token is found, or the message has a trailer line. It also blocks
   any Bash command that force-deletes (`rm -rf`) or names a private file. Fix the problem it

@@ -18,4 +18,8 @@ def private_files_in_tmp(tmp_path, monkeypatch):
                        ("LINK_INDEX_FILE", "link_index.json")):
         monkeypatch.setattr(processor, name, tmp_path / "private" / file, raising=False)
     monkeypatch.setattr(processor, "PENDING_DIR", tmp_path / "private" / "pending", raising=False)
+    # no test may reach a real Ollama on this PC: a test that needs the AI mocks requests.post itself
+    def no_network(*a, **k):
+        raise processor.requests.exceptions.ConnectionError("no network in tests")
+    monkeypatch.setattr(processor.requests, "post", no_network)
     (tmp_path / "private").mkdir()

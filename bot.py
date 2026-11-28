@@ -780,6 +780,11 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not query:
         await update.message.reply_text("Usage: /search strix  (or several words: /search claude memory)")
         return
+    await send_search(update, context, query)
+
+
+async def send_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
+    """The /search reply (also used by chat: "find my notes about strix")."""
     results = processor.search_notes(query)
     if not results:
         await update.message.reply_text(f"🔍 No notes found for \"{query}\".")
@@ -808,7 +813,12 @@ async def note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not 1 <= n <= len(paths) or not Path(paths[n - 1]).exists():
         await update.message.reply_text("No note with that number. Run /search or /notes again.")
         return
-    await update.message.reply_text(processor.note_summary_text(Path(paths[n - 1]))[:4000])
+    await send_note(update, Path(paths[n - 1]))
+
+
+async def send_note(update: Update, path: Path) -> None:
+    """The /note reply: the note without its transcript."""
+    await update.message.reply_text(processor.note_summary_text(path)[:4000])
 
 
 async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -853,6 +863,12 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await save_learning(update, context, replied.message_id)
         return
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    try:
+        intent = await asyncio.to_thread(processor.detect_intent, text)
+    except Exception:                                    # AI down or odd answer: just chat
+        intent = {"intent": "chat", "words": ""}
+    if await run_chat_intent(update, context, intent):
+        return
     history = context.chat_data.setdefault("chat_history", [])
     try:
         reply, sources = await asyncio.to_thread(processor.chat_reply, text, list(history))
@@ -874,6 +890,96 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             titles.append(f"{n}. {title}")
         reply += "\n\n📚 From your notes (open with /note 1):\n" + "\n".join(titles)
     await update.message.reply_text(reply[:4000])
+
+
+async def run_chat_intent(update: Update, context: ContextTypes.DEFAULT_TYPE, intent: dict) -> bool:
+    """Do what a chat message asked, with the same code as the commands. False = just chat."""
+    kind, words = intent.get("intent"), (intent.get("words") or "").strip()
+    if kind in ("done", "skip"):
+        await offer_chat_action(update.message, context, "x" if kind == "done" else "-", words)
+    elif kind in CHAT_COMMANDS:
+        await CHAT_COMMANDS[kind](update, context)
+    elif kind == "find_note" and words:
+        await send_search(update, context, words)
+    elif kind == "show_note" and words:
+        found = processor.search_notes(words, limit=1) or processor.search_notes(words, 1, match_all=False)
+        if not found:
+            await update.message.reply_text(f"🔍 No note found for \"{words}\". Try /notes")
+        else:
+            await send_note(update, found[0]["path"])
+    else:
+        return False
+    return True
+
+
+def chat_action_text(mark: str, action: dict) -> str:
+    verb = "Tick this off as done?" if mark == "x" else "Skip this action?"
+    return f"{verb}\n\n• {action['action']}\n📝 from: {action['title']}"
+
+
+def chat_action_buttons(mark: str) -> InlineKeyboardMarkup:
+    yes = "✅ Yes, tick it" if mark == "x" else "⏭ Yes, skip it"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(yes, callback_data="chatact:yes"),
+                                  InlineKeyboardButton("Not this one", callback_data="chatact:next"),
+                                  InlineKeyboardButton("Cancel", callback_data="chatact:no")]])
+
+
+async def offer_chat_action(message, context, mark: str, words: str) -> None:
+    """"I finished the Hallmark task": show the best matching open action with buttons.
+    Nothing changes until "Yes" is pressed."""
+    found = processor.match_actions(words) if words else []
+    if not found:
+        await message.reply_text(
+            f"I couldn't find an open action that matches \"{words}\". "
+            "Send /todo to see the list, then /done 2." if words else
+            "Which action? Say its name, e.g. \"I finished the Strix task\", or send /todo.")
+        return
+    context.user_data["chat_action"] = {"mark": mark, "ids": [processor.action_id(a) for a in found], "i": 0}
+    more = f"\n\n({len(found)} actions match. \"Not this one\" shows the next.)" if len(found) > 1 else ""
+    await message.reply_text(chat_action_text(mark, found[0]) + more, reply_markup=chat_action_buttons(mark))
+
+
+async def chat_action_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Yes / Not this one / Cancel under a chat action. Only "Yes" changes a note."""
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    offer = context.user_data.get("chat_action")
+    if not offer:
+        await query.edit_message_text("That question is old. Say it again, or use /todo.")
+        return
+    if query.data == "chatact:no":
+        context.user_data.pop("chat_action", None)
+        await query.edit_message_text("OK, nothing changed.")
+        return
+    if query.data == "chatact:next":
+        offer["i"] += 1
+        while offer["i"] < len(offer["ids"]):
+            found = processor.find_action(offer["ids"][offer["i"]])
+            if found:
+                await query.edit_message_text(chat_action_text(offer["mark"], found[1]),
+                                              reply_markup=chat_action_buttons(offer["mark"]))
+                return
+            offer["i"] += 1
+        context.user_data.pop("chat_action", None)
+        await query.edit_message_text("No other match. Nothing changed. Send /todo to see the list.")
+        return
+    context.user_data.pop("chat_action", None)
+    found = processor.find_action(offer["ids"][offer["i"]])
+    if not found:
+        await query.edit_message_text("That action is already done or gone. Nothing changed.")
+        return
+    number, action = found
+    changed = processor.complete_actions([number], offer["mark"])     # same code as /done and /skip
+    if not changed:
+        await query.edit_message_text("I couldn't change it. Send /todo and try /done there.")
+        return
+    word = "Ticked" if offer["mark"] == "x" else "Skipped"
+    await query.edit_message_text(f"{'✅' if offer['mark'] == 'x' else '⏭'} {word}: {changed[0]} "
+                                  f"(from {action['title']})")
+    if offer["mark"] == "x":
+        await ask_learning(query.message, context, action)
 
 
 async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1694,6 +1800,10 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         traceback.print_exception(err)
 
 
+# chat intents that are just a command with no words
+CHAT_COMMANDS = {"todo": todo, "stats": stats, "dupes": dupes, "tools": tools}
+
+
 def build_app() -> Application:
     """Create the bot with all its commands and scheduled jobs (doesn't start it)."""
     # Telegram's default 5-second limit is too short for photos/videos on a slow
@@ -1736,6 +1846,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("due", due))
     app.add_handler(CallbackQueryHandler(redo_button_pressed, pattern=r"^redo:"))
     app.add_handler(CallbackQueryHandler(save_again_pressed, pattern=r"^again:"))
+    app.add_handler(CallbackQueryHandler(chat_action_pressed, pattern=r"^chatact:"))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("file", send_file))

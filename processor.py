@@ -6,6 +6,7 @@ Pipeline (all free, all local):
         -> Ollama local LLM (summary + action items as JSON)
         -> markdown file in NOTES_DIR
 """
+import difflib
 import json
 import os
 import re
@@ -1100,11 +1101,6 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "",
     return save_note(data, transcript, screen, source, language, caption), data
 
 
-def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
-    """One video file (kept for older code paths)."""
-    return process_videos([video], source)
-
-
 YOUTUBE_ID_RE = re.compile(
     r"(?:youtube\.com/(?:shorts/|watch\?(?:.*&)?v=|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
 
@@ -1124,8 +1120,9 @@ def normalise_url(url: str) -> str:
     Short links (vm.tiktok.com, share links) can't be opened without the internet, so they
     stay as URLs."""
     url = url.strip()
-    if threads_link.dedupe_key(url):
-        return threads_link.dedupe_key(url)
+    threads_key = threads_link.dedupe_key(url)
+    if threads_key:
+        return threads_key
     x = X_STATUS_RE.match(url)
     if x:
         return "x:" + x.group(1)                 # x.com, twitter.com and mobile links: same post
@@ -1591,13 +1588,19 @@ def tool_type(name: str, link: str) -> str:
     return "repo" if GITHUB_REPO_RE.search(link) else "tool"
 
 
+def catalog_maps(catalog: dict | None = None) -> tuple[dict, dict, set]:
+    """(aliases, entries, stoplist), keyed by squash(name). One place, so /tools and new notes
+    always clean names the same way."""
+    cat = catalog if catalog is not None else load_tool_catalog()
+    return ({squash(k): v for k, v in cat.get("aliases", {}).items()},
+            {squash(k): (k, v) for k, v in cat.get("entries", {}).items()},
+            {squash(s) for s in cat.get("stoplist", [])})
+
+
 def clean_tools(raw: list[tuple[str, str, str]], catalog: dict | None = None) -> list[tuple]:
     """(name, link, note file) rows -> (name, link or 'No repo found', notes count, type).
     Folds aliases and 'X GitHub'-style names into one tool, drops stoplist names and bad links."""
-    cat = catalog if catalog is not None else load_tool_catalog()
-    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
-    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
-    stop = {squash(s) for s in cat.get("stoplist", [])}
+    aliases, entries, stop = catalog_maps(catalog)
     groups: dict[str, dict] = {}
     for name, link, note in raw:
         name, link = name.replace("�", "").strip(), link.strip()
@@ -1639,10 +1642,7 @@ def clean_resources(resources: list, catalog: dict | None = None) -> list:
     """A new note's resources, cleaned with the /tools catalog rules: alias -> one name, stoplist,
     file names and non-tool types (company, course, language...) dropped, the catalog link used.
     Any other link must already be one the video showed (drop_invented_links runs first)."""
-    cat = catalog if catalog is not None else load_tool_catalog()
-    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
-    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
-    stop = {squash(s) for s in cat.get("stoplist", [])}
+    aliases, entries, stop = catalog_maps(catalog)
     kept: dict[str, dict] = {}
     for r in resources:
         if not isinstance(r, dict):
@@ -2481,6 +2481,9 @@ How to talk:
 - Small talk (hello, thanks, how are you) is fine: answer briefly and kindly.
 - When it helps, suggest a next step, e.g. "Want a reminder? /remind 2 friday".
 - Use plain text only, no Markdown symbols like ** or ##.
+- You CANNOT change tasks or notes in this chat. Never say you marked, ticked, skipped,
+  completed, deleted, added or changed anything. Instead suggest the right command,
+  e.g. "Send /todo, then /done 2" or "Say: I finished the <task name>".
 
 MY NOTES FOR THIS MESSAGE:
 <<NOTES>>
@@ -2524,8 +2527,84 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
     resp.raise_for_status()
     reply = strip_thinking(resp.json().get("message", {}).get("content") or "")
     reply = re.sub(r"\*\*|__|^#+\s*", "", reply, flags=re.M)   # strip Markdown leftovers
+    if CLAIMED_ACTION_RE.search(reply):          # the model said it did something: it can't
+        reply = NO_CHAT_ACTIONS
     return reply or "Sorry, I couldn't think of an answer. Can you ask another way?", \
         [h["path"] for h in hits]
+
+
+# ---- chat actions: "I finished the Hallmark task" -> a real /done, after a button ----------
+
+CLAIMED_ACTION_RE = re.compile(
+    r"\bI(?:'ve| have|'ll| will)?\s+(?:just\s+|now\s+|already\s+)?(?:marked|ticked|checked off|"
+    r"completed|skipped|deleted|removed|added|updated|changed|set|moved|saved)\b"    # "I've marked it"
+    r"|\b(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:marked|ticked|checked off|completed|"
+    r"skipped|deleted|removed)\b"                                                     # "it has been completed"
+    r"|\b(?:is|are|has been|have been) now done\b|\b(?:has|have) been done\b"         # "it is now done"
+    r"|(?:^|[.!?]\s+)done!|\ball set\b", re.I | re.M)                                 # "Done!" (not "Well done!")
+NO_CHAT_ACTIONS = "I can't change tasks in chat. Try: I finished <task>, or /done."
+# messages without one of these words never ask the AI for an intent (saves one AI call per chat)
+TASK_HINT_RE = re.compile(
+    r"\b(?:finish|finished|complete|completed|done|did|tick|ticked|mark|marked|skip|todo|to-do|list|"
+    r"stats|find|show|open|tools?|dupes?|twice)\b", re.I)
+CHAT_INTENTS = ("done", "skip", "todo", "stats", "find_note", "show_note", "dupes", "tools", "chat")
+INTENT_PROMPT = """You sort one message sent to my notes bot. Return ONLY JSON:
+{"intent": "...", "words": "..."}
+intent is one of:
+- "done": I say I finished or did a task ("I finished the Hallmark task", "done with the strix one")
+- "skip": I want to drop a task ("skip the BLA one", "I won't do the Notion task")
+- "todo": I want my task list ("show my todo list", "what's left to do?")
+- "stats": I want my progress numbers ("how did I do this week?")
+- "find_note": I want to find notes about something ("find my notes about Claude memory")
+- "show_note": I want to open one note ("open the Strix note", "show me the note about Higgsfield")
+- "dupes": I want videos I saved twice
+- "tools": I want the list of tools in my notes
+- "chat": anything else (questions, small talk)
+words: the few words that name the task or topic, copied from the message (e.g. "Hallmark").
+Use "" when there are none.
+
+MESSAGE: <<MESSAGE>>"""
+INTENT_SCHEMA = {"type": "object", "properties": {"intent": {"type": "string", "enum": list(CHAT_INTENTS)},
+                                                  "words": {"type": "string"}},
+                 "required": ["intent", "words"]}
+# words that say what to do, not which task it is
+TASK_FILLER = {"task", "tasks", "action", "item", "one", "thing", "todo", "finish", "finished", "done",
+               "skip", "complete", "completed", "mark", "tick", "drop", "note", "please"}
+
+
+def detect_intent(message: str) -> dict:
+    """{'intent': one of CHAT_INTENTS, 'words': '...'} from the local model. Unsure -> 'chat'.
+    A message with no task or command word is chat, with no AI call."""
+    if not TASK_HINT_RE.search(message):
+        return {"intent": "chat", "words": ""}
+    data = ask_ollama_json(INTENT_PROMPT.replace("<<MESSAGE>>", message), schema=INTENT_SCHEMA)
+    intent = str(data.get("intent", "")).strip().lower()
+    return {"intent": intent if intent in CHAT_INTENTS else "chat", "words": text_of(data.get("words"))}
+
+
+def _word_hit(word: str, targets: set[str]) -> bool:
+    """'hallmark' hits 'hallmark'; small typos ('halmark') hit too."""
+    return word in targets or any(
+        len(t) >= 4 and difflib.SequenceMatcher(None, word, t).ratio() >= 0.85 for t in targets)
+
+
+def match_actions(words: str, limit: int = 3) -> list[dict]:
+    """Open actions that best match the words, best first, by action text and note title.
+    Up to `limit` actions that share at least half of the words come back, so the user can
+    step through them with "Not this one"."""
+    query = {w for w in idea_words(words) if w not in TASK_FILLER} or {
+        w.lower() for w in re.findall(r"[A-Za-z0-9]{2,}", words) if w.lower() not in TASK_FILLER}
+    if not query:
+        return []
+    scored = []
+    for a in open_actions():
+        targets = idea_words(a["action"]) | idea_words(a["title"]) | {
+            w.lower() for w in re.findall(r"[A-Za-z0-9]{2,}", a["action"] + " " + a["title"])}
+        score = sum(_word_hit(w, targets) for w in query) / len(query)
+        if score >= 0.5:
+            scored.append((score, a))
+    scored.sort(key=lambda s: -s[0])                 # stable: /todo order inside one score
+    return [a for _, a in scored[:limit]]
 
 
 # ---- /plan: turn a note into a ready-to-paste prompt for Claude ---------------
