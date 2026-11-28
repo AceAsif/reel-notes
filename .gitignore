@@ -20,3 +20,5 @@ search_index.json
 tools-export.csv
 tools-export-share.csv
 how to update the bot using pyton command.txt
+*.broken-*
+.pytest_tmp/

@@ -1255,11 +1255,15 @@ def _index_entry(label: str, path: Path) -> tuple[str, dict] | None:
     return normalise_url(source), {"file": path.name, "saved": f"{saved:%Y-%m-%d %H:%M}", "folder": label}
 
 
-def write_json_atomic(path: Path, data) -> None:
-    """Write JSON to a temp file, then swap it in, so a crash never leaves half a file."""
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write to a temp file in the same folder, then swap it in, so a crash never leaves half a file."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def write_json_atomic(path: Path, data) -> None:
+    write_text_atomic(path, json.dumps(data, indent=1, ensure_ascii=False))
 
 
 def _save_link_index(data: dict) -> None:
@@ -1469,7 +1473,7 @@ def set_due(numbers: list[int], due: date | None) -> list[str]:
     for a in chosen:
         lines = a["path"].read_text(encoding="utf-8").splitlines()
         lines[a["line"]] = todo_line(a, due=due)
-        a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_text_atomic(a["path"], "\n".join(lines) + "\n")
     return [a["action"] for a in chosen]
 
 
@@ -1502,7 +1506,7 @@ def set_priority(numbers: list[int], level: str) -> list[str]:
     for a in chosen:
         lines = a["path"].read_text(encoding="utf-8").splitlines()
         lines[a["line"]] = todo_line(a, priority=level)
-        a["path"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_text_atomic(a["path"], "\n".join(lines) + "\n")
     return [a["action"] for a in chosen]
 
 
@@ -1528,7 +1532,7 @@ def rename_tag(old: str, new: str) -> int:
             if line.startswith("- Tags:"):
                 lines[i] = tags_line(merged)
                 break
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_text_atomic(path, "\n".join(lines) + "\n")
         changed += 1
     return changed
 
@@ -1578,11 +1582,11 @@ def write_note_file(name: str, text: str, keep_existing: bool = True) -> Path:
     try:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(NOTES_DIR, name) if keep_existing else NOTES_DIR / name
-        path.write_text(text, encoding="utf-8")
+        write_text_atomic(path, text)
     except OSError as exc:
         PENDING_DIR.mkdir(parents=True, exist_ok=True)
         path = _free_name(PENDING_DIR, name) if keep_existing else PENDING_DIR / name
-        path.write_text(text, encoding="utf-8")
+        write_text_atomic(path, text)
         _log_notes(f"notes folder not available ({exc!r}). Saved {path.name} in {PENDING_DIR} for now")
     add_to_link_index(path)
     return path
@@ -1846,7 +1850,7 @@ def tag_untagged_notes() -> list[tuple[str, list[str]]]:
             while i < len(lines) and lines[i].startswith("- "):
                 i += 1
             lines.insert(i, tags_line(tags))
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_text_atomic(path, "\n".join(lines) + "\n")
         title = lines[0].lstrip("# ").strip()
         done.append((title, tags))
     return done
@@ -2035,7 +2039,7 @@ def complete_actions(numbers: list[int], mark: str = "x") -> list[str]:
             # Record the date too (Obsidian Tasks style): ✅ = done, ❌ = skipped
             stamp = f" {'✅' if mark == 'x' else '❌'} {datetime.now():%Y-%m-%d}"
             lines[i] = lines[i].replace("- [ ] ", f"- [{mark}] ", 1) + stamp
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_text_atomic(path, "\n".join(lines) + "\n")
     return [a["action"] for a in chosen]
 
 
@@ -2095,7 +2099,7 @@ def add_learning(note_name: str, action_text: str, learning: str) -> bool:
         lines[i + 1] = line
     else:
         lines.insert(i + 1, line)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_text_atomic(path, "\n".join(lines) + "\n")
     return True
 
 
@@ -2269,12 +2273,30 @@ def usage_text() -> str:
     return "\n".join(lines)
 
 
-def load_state() -> dict:
+def load_json_backed_up(path: Path, empty):
+    """Read a JSON state file. A broken file is moved to <name>.broken-<time> and logged before
+    we carry on with `empty`, so the next save never wipes what was in it without a trace.
+    Moved, not copied: a copy would make a new backup on every read until the next save."""
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, ValueError):
-        return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, type(empty)):
+            return data
+        problem = f"not a {type(empty).__name__}"
+    except FileNotFoundError:
+        return empty
+    except (OSError, ValueError) as exc:
+        problem = repr(exc)
+    backup = path.with_name(f"{path.name}.broken-{datetime.now():%Y%m%d-%H%M%S}")
+    try:
+        os.replace(path, backup)
+        _log_notes(f"WARNING: {path.name} could not be read ({problem}). Moved to {backup.name}")
+    except OSError as exc:
+        _log_notes(f"WARNING: {path.name} could not be read ({problem}), and the backup failed: {exc!r}")
+    return empty
+
+
+def load_state() -> dict:
+    return load_json_backed_up(STATE_FILE, {})
 
 
 def save_state(state: dict) -> None:
@@ -2367,7 +2389,7 @@ def undo_cleanup() -> int:
             if line.startswith(skipped_form) and STAMP_RE.fullmatch(line[len(skipped_form):]):
                 lines[i] = item["line"]
                 restored += 1
-                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                write_text_atomic(path, "\n".join(lines) + "\n")
                 break
     CLEANUP_UNDO_FILE.unlink(missing_ok=True)
     return restored
@@ -2579,10 +2601,7 @@ def _safe_date(year, month, day, now=None, year_given="yes"):
 
 
 def load_reminders() -> list[dict]:
-    try:
-        return json.loads(REMINDERS_FILE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return []
+    return load_json_backed_up(REMINDERS_FILE, [])
 
 
 def save_reminders(reminders: list[dict]) -> None:
@@ -2616,11 +2635,7 @@ SENT_JOBS_FILE = Path(os.getenv("SENT_JOBS_FILE", "sent_jobs.json"))
 def load_sent_jobs() -> dict:
     """{'nudge': '2026-11-16', 'weekly': '2026-11-15', ...}: the last time slot
     each scheduled message was sent for."""
-    try:
-        data = json.loads(SENT_JOBS_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, ValueError):
-        return {}
+    return load_json_backed_up(SENT_JOBS_FILE, {})
 
 
 def save_sent_jobs(sent: dict) -> None:
@@ -3094,10 +3109,10 @@ def replace_note(old: Path, old_text: str, new: Path) -> Path:
     file is removed. If anything fails, the old text is put back."""
     new_text = new.read_text(encoding="utf-8")
     try:
-        old.write_text(new_text, encoding="utf-8")
+        write_text_atomic(old, new_text)
         carry_over(old, finished_items(old_text.splitlines()))
     except Exception:
-        old.write_text(old_text, encoding="utf-8")
+        write_text_atomic(old, old_text)
         raise
     if new.resolve() != old.resolve():
         new.unlink(missing_ok=True)     # the link index sees the file list change and rebuilds
@@ -3232,7 +3247,7 @@ def carry_over(path: Path, finished: list[list[str]]) -> None:
         while end > start + 1 and not out[end - 1].strip():
             end -= 1
         out[end:end] = [line for block in left for line in block]
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    write_text_atomic(path, "\n".join(out) + "\n")
 
 
 def redo_from_saved(path: Path) -> tuple[Path, dict]:

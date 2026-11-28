@@ -1466,3 +1466,27 @@ def test_state_saves_never_leave_half_a_file(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         p.save_reminders([])
     assert len(p.load_reminders()) == 1   # the old reminders are still there
+
+
+def test_failed_swap_leaves_old_note_intact(tmp_path, monkeypatch):
+    note = tmp_path / "2026-11-01 a.md"
+    note.write_text("# Old\n- [ ] Do it\n", encoding="utf-8")
+    monkeypatch.setattr(p.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("power cut")))
+    with pytest.raises(OSError):
+        p.write_text_atomic(note, "# New\n")
+    assert note.read_text(encoding="utf-8") == "# Old\n- [ ] Do it\n"
+
+
+def test_broken_reminders_file_is_backed_up_not_lost(tmp_path, monkeypatch):
+    path = tmp_path / "r.json"
+    path.write_text('[{"action_id": "a", "text": "t", "wh', encoding="utf-8")   # cut off mid-write
+    monkeypatch.setattr(p, "REMINDERS_FILE", path)
+    logged = []
+    monkeypatch.setattr(p, "_log_notes", logged.append)
+    assert p.load_reminders() == []
+    backups = list(tmp_path.glob("r.json.broken-*"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8").startswith('[{"action_id"')
+    assert "WARNING" in logged[0]
+    assert p.load_reminders() == [] and len(list(tmp_path.glob("r.json.broken-*"))) == 1   # no pile-up
+    p.save_reminders([])                                   # the next save keeps the backup
+    assert backups[0].exists()
