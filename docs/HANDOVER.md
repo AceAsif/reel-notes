@@ -150,7 +150,7 @@ reminders still work (`legacy_action_id`).
 - **Clean-up:** `/cleanup` (`cleanup_plan`, `skip_actions_by_id`) skips junk offers and extra
   actions (keeps the best per note, due-dated ones and "Habit to try"), after a confirm button.
   The Sunday review hints at it above 30 open actions.
-- **Notes folder missing** (Google Drive not running): the note is saved in `notes/pending` on the PC
+- **Notes folder missing** (the sync app is not running): the note is saved in `notes/pending` on the PC
   and moved back by `sync_pending` (the 5-minute check) when the folder is back. Nothing is lost.
 - **One idea, one to-do:** a habit that says the same as an action is merged (`merge_habit_and_actions`);
   old notes are handled by `/cleanup`.
@@ -230,7 +230,7 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
   "save one, do one" after a new note, a nudge with the link and key points, 🤖 Get prompt
   (`/prompt`), "What did you learn?" after a Done (shown in `/month`), habit and action merged into
   one to-do, `/redo fast` (rebuild a note from its saved text, no download), stable `/todo` numbers, catch-up of missed messages when the PC starts.
-- **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when Google Drive
+- **Reliability and tools:** timing in the reply and `bot.log`, notes kept on the PC when the synced folder
   is missing (and moved back later), search that keeps short words (ai, uv), `/usage`, rules and
   hooks for Claude Code (`CLAUDE.md`, `.claude/`).
 
@@ -260,7 +260,7 @@ open ones, 56 are 🔥 high (so "high" tells very little) and 32 are habits (�
 - (Done) Skip junk resources that are file names (.xlsx).
 - Show `/health` in the weekly review. 🟢
 - Backup copy before `/renametag` and `/retag`. 🟢
-- Check: send one Facebook share link again. The failure on 2026-11-19 was the missing Google Drive,
+- Check: send one Facebook share link again. The failure on 2026-11-19 was the missing notes folder,
   not Facebook.
 - Check: paste the BotFather list (`botfather-commands.txt`) into BotFather when commands are added.
 
