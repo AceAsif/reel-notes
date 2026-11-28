@@ -921,7 +921,7 @@ def test_sent_jobs_file(tmp_path, monkeypatch):
 # ---- fewer actions, and pick ONE when a note is saved --------------------------------
 
 def test_prompt_asks_for_few_actions_all_steps_and_simple_english():
-    assert "list of 0-2 objects" in p.PROMPT and "Use [] if nothing" in p.PROMPT
+    assert "list of 1-2 objects" in p.PROMPT and "are NOT actions" in p.PROMPT
     assert "keep EVERY step" in p.PROMPT
     assert "simple English" in p.PROMPT
 
@@ -1334,3 +1334,84 @@ def test_tools_reads_new_no_link_found_lines(notes):
     p.NOTES_DIR.joinpath("a.md").write_text("# A\n\n## Resources\n- Agent Wars — No link found\n",
                                             encoding="utf-8")
     assert p.all_tools() == [("Agent Wars", "No repo found", 1, "tool")]
+
+
+# ---- every new note gets an action -------------------------------------------------------
+
+HALLMARK = {"name": "hallmark", "link": "https://github.com/Nutlope/hallmark"}
+
+
+def summarise_steps(monkeypatch, note_actions, retry, resources=(), habit="", transcript="try hallmark",
+                    category="tech"):
+    """Mock Ollama: the note first, then the retry answer (or an error)."""
+    answers = [{"title": "Premium sites", "category": category, "summary": "Hallmark makes sites look premium.",
+                "key_points": [], "tags": [], "claims": [], "resources": list(resources),
+                "action_items": note_actions, "habit": habit}, retry]
+    calls = []
+    def fake(prompt, **k):
+        calls.append(prompt)
+        answer = answers[len(calls) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(p, "all_tags", lambda: [])
+    monkeypatch.setattr(p, "enrich_with_github", lambda r, c, t: r)
+    monkeypatch.setattr(p, "ask_ollama_json", fake)
+    return p.summarise(transcript, "github.com/Nutlope/hallmark", ""), calls
+
+
+def test_only_a_comment_bait_action_asks_the_ai_again(monkeypatch):
+    data, calls = summarise_steps(monkeypatch, [{"text": "Comment HALLMARK to get the skill"}],
+                                  {"action_items": [{"text": "Install the Hallmark skill and try it on one page"}]},
+                                  resources=[HALLMARK])
+    assert [a["text"] for a in data["action_items"]] == ["Install the Hallmark skill and try it on one page"]
+    assert "default_action" not in data and len(calls) == 2
+    assert "hallmark https://github.com/Nutlope/hallmark" in calls[1] and "comment X" in calls[1]
+    assert data["creator_offers"] == ["Comment HALLMARK to get the skill"]       # kept as an offer
+
+
+def test_still_no_action_adds_try_main_resource_and_warns(monkeypatch, capsys):
+    data, _ = summarise_steps(monkeypatch, [], {"action_items": [{"text": "Comment SKILL for the link"}]},
+                              resources=[HALLMARK])
+    assert [a["text"] for a in data["action_items"]] == ["Try hallmark: https://github.com/Nutlope/hallmark"]
+    assert data["default_action"] is True
+    assert "warning: no action found" in capsys.readouterr().out
+
+
+def test_no_resource_and_ai_down_adds_review_this_note(monkeypatch):
+    data, _ = summarise_steps(monkeypatch, [], p.requests.exceptions.ConnectionError("down"))
+    assert [a["text"] for a in data["action_items"]] == ["Review this note"] and data["default_action"]
+
+
+def test_a_habit_note_needs_no_extra_action(monkeypatch):
+    data, calls = summarise_steps(monkeypatch, [], {}, habit="Every morning, write one goal",
+                                  transcript="every morning write one goal", category="motivation")
+    assert data["action_items"] == [] and len(calls) == 1 and "default_action" not in data
+
+
+def test_a_real_action_is_kept_without_asking_again(monkeypatch):
+    data, calls = summarise_steps(monkeypatch, [{"text": "Try Hallmark on my landing page"}], {})
+    assert len(calls) == 1 and [a["text"] for a in data["action_items"]] == ["Try Hallmark on my landing page"]
+
+
+def test_screen_only_name_borrowing_another_resources_link_is_dropped():
+    relay = {"name": "Relay Example", "link": "https://github.com/Nutlope/hallmark"}
+    strix = {"name": "Strix", "link": "https://github.com/usestrix/strix"}
+    said = "I use hallmark and strix"
+    assert p.drop_link_borrowers([dict(HALLMARK), dict(relay), dict(strix)], said) == [HALLMARK, strix]
+    assert p.drop_link_borrowers([dict(HALLMARK), dict(relay)], "nothing said") == [HALLMARK, relay]
+    assert p.drop_link_borrowers([dict(relay), {"name": "Other", "link": ""}], said) == \
+        [relay, {"name": "Other", "link": ""}]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Try the Hallmark skill today. It makes sites look premium. "
+     "Try the Hallmark skill today. It makes sites look premium.",
+     "Try the Hallmark skill today. It makes sites look premium."),
+    ("Subscribe now. Subscribe now. Subscribe now. Thanks.", "Subscribe now. Thanks."),
+    ("no no no", "no no no"),
+    ("A normal transcript with no repeats at all.", "A normal transcript with no repeats at all."),
+    ("", ""),
+])
+def test_transcript_that_repeats_itself_is_kept_once(text, expected):
+    assert p.collapse_repeats(text) == expected

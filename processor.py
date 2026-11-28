@@ -61,7 +61,7 @@ def transcribe(video: Path) -> tuple[str, str]:
     language = info.language or "en"
     if language != "en":
         segments, _ = model.transcribe(str(video), vad_filter=True, task="translate")
-    return " ".join(seg.text.strip() for seg in segments).strip(), language
+    return collapse_repeats(" ".join(seg.text.strip() for seg in segments)), language
 
 
 def has_audio(video: Path) -> bool:
@@ -117,11 +117,11 @@ Return ONLY a JSON object with these keys:
   languages. Use the product's own name (e.g. "Claude Code", not "Claude's coding tool").
   Fix obvious OCR typos. Only use a URL that was actually shown or said; never invent one.
   Use "" for link otherwise (never "N/A").
-- "action_items": list of 0-2 objects {"text": "...", "priority": "high" | "normal" | "low",
+- "action_items": list of 1-2 objects {"text": "...", "priority": "high" | "normal" | "low",
   "type": "ai" | "habit" | "lookup"}.
   Fewer is better: I have little time, so give only the one or two actions that are really
-  worth doing (the best first).
-  Use [] if nothing in the video is worth doing. Never add an action just to fill the list.
+  worth doing (the best first). Give at least one: a real step, like trying the main tool.
+  "Comment X to get the link", "DM me", "follow" or "link in bio" are NOT actions.
   "text" is a short, concrete thing I should do, starting with a verb,
   e.g. "Find the Strix GitHub repo and read its README". Only actions supported by the video.
   When the video names several tools, pick the one or two most useful ones.
@@ -526,6 +526,7 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
                     .replace("<<SCREEN>>", screen or "(no on-screen text)")
                     .replace("<<CAPTION>>", caption or "(no caption)")
                     .replace("<<EXISTING_TAGS>>", tag_hint))
+    said = transcript + "\n" + caption
     screen = screen + "\n" + caption  # links in the caption count as "shown in the post"
     data = ask_ollama_json(prompt, schema=NOTE_SCHEMA)
     if not data:
@@ -539,11 +540,78 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     merge_habit_and_actions(data)             # one idea = one to-do
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
+    data["resources"] = drop_link_borrowers(data["resources"], said)
     data["resources"] = mark_unverified_names(data["resources"], transcript + "\n" + screen)
     data["resources"] = clean_resources(data["resources"])     # same catalog rules as /tools
     data["resources"] = enrich_with_github(data["resources"], data["category"],
                                            transcript + "\n" + screen)
+    ensure_action(data)
     return data
+
+
+ACTION_RETRY_PROMPT = """A note about a short video has no action yet. Give one or two concrete
+things I can do, based on the summary and the main resource. Start each with a verb, e.g.
+"Install the Hallmark skill and try it on one page". Never "comment X to get the link", "DM me",
+"follow" or "link in bio": those are not actions.
+Return ONLY JSON: {"action_items": [{"text": "...", "priority": "normal", "type": "ai" | "habit" | "lookup"}]}
+
+TITLE: <<TITLE>>
+SUMMARY: <<SUMMARY>>
+MAIN RESOURCE: <<RESOURCE>>"""
+DEFAULT_ACTION_NOTICE = "⚠️ No action found, added a default"
+
+
+def ensure_action(data: dict) -> None:
+    """Every new note gets a to-do. No action left (the AI gave none, or only "comment X")?
+    Ask once more; still none: "Try <main resource>: <link>", or "Review this note"."""
+    if data.get("action_items") or data.get("habit"):    # a habit is the note's to-do
+        return
+    main = next((r for r in data.get("resources", []) if isinstance(r, dict) and r.get("name")
+                 and not r.get("unverified")), None)
+    prompt = (ACTION_RETRY_PROMPT.replace("<<TITLE>>", data.get("title", ""))
+              .replace("<<SUMMARY>>", data.get("summary", ""))
+              .replace("<<RESOURCE>>", f"{main['name']} {main.get('link', '')}".strip() if main else "(none)"))
+    try:
+        retry = ask_ollama_json(prompt)
+    except requests.RequestException:
+        retry = {}
+    data["action_items"] = split_actions(clean_actions(retry.get("action_items", [])))[0]
+    if data["action_items"]:
+        return
+    text = ("Review this note" if not main else
+            f"Try {main['name']}: {main['link']}" if main.get("link") else f"Try {main['name']}")
+    data["action_items"] = clean_actions([{"text": text, "priority": "normal", "type": "lookup"}])
+    data["default_action"] = True
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] warning: no action found for "
+          f"\"{data.get('title', '')}\", added a default: {text}", flush=True)
+
+
+def drop_link_borrowers(resources: list, said_text: str) -> list:
+    """Two resources with one link: keep the ones the video says, drop a name that was only on
+    screen ("Relay Example" pointing at the Hallmark repo). With none said, keep them all."""
+    said = squash(said_text)
+    groups: dict[str, list] = {}
+    for r in resources:
+        if isinstance(r, dict) and str(r.get("link", "")).strip():
+            groups.setdefault(str(r["link"]).strip().rstrip("/").lower(), []).append(r)
+    drop = set()
+    for group in groups.values():
+        spoken = [r for r in group if squash(str(r.get("name", ""))) in said]
+        if len(group) > 1 and spoken:
+            drop |= {id(r) for r in group if r not in spoken}
+    return [r for r in resources if id(r) not in drop]
+
+
+def collapse_repeats(text: str) -> str:
+    """Whisper sometimes loops: the same sentence again and again, or the whole text twice.
+    Keep one copy."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = [s for n, s in enumerate(sentences) if n == 0 or s != sentences[n - 1]]
+    words = " ".join(kept).split()
+    for size in range(4, len(words) // 2 + 1):       # 4+ words: "no no no" is real speech
+        if len(words) % size == 0 and words == words[:size] * (len(words) // size):
+            return " ".join(words[:size])
+    return " ".join(kept)
 
 
 # ---- GitHub repo detection ------------------------------------------------

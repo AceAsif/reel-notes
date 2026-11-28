@@ -72,6 +72,8 @@ def format_reply(data: dict, note_path: Path) -> str:
         parts += [f"☐ {processor.PRIORITY_ICON[a['priority']]}"
                   f"{processor.kind_icon(a.get('kind', ''))}{a['text']}"
                   for a in data["action_items"]]
+        if data.get("default_action"):
+            parts.append(processor.DEFAULT_ACTION_NOTICE)
     if data.get("other_ideas"):
         parts += ["", "💭 Other ideas (not on your to-do list):",
                   *[f"• {i}" for i in data["other_ideas"]]]
