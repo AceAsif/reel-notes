@@ -122,6 +122,15 @@ def test_exact_words_scaled_and_mixed(notes, monkeypatch):
     assert found[0]["score"] == pytest.approx(1.0)
 
 
+def test_small_words_do_not_count_as_exact_matches(notes, monkeypatch):
+    folder, _ = notes
+    write(folder, "2026-11-01 a.md", "How to cook", "how to do it")
+    write(folder, "2026-11-02 b.md", "Diagrams", "draw diagrams")
+    monkeypatch.setattr(p, "embed", lambda texts, prefix: [[1.0, 0.0, 0.0] for _ in texts])
+    found = p.meaning_search("how to draw diagrams")
+    assert found[0]["title"] == "Diagrams" and found[1]["score"] == pytest.approx(0.7)
+
+
 def test_falls_back_to_exact_words_when_ollama_is_down(notes, monkeypatch):
     folder, _ = notes
     write(folder, "2026-11-01 a.md", "Pasta", "A recipe")

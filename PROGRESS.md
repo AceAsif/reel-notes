@@ -12,7 +12,9 @@ Last updated: 2026-11-28
   score). If Ollama is down it falls back to exact words.
 - Step 4: the index file added to .gitignore, the hook lists and CLAUDE.md. Embeds in batches of 32, saved after each.
 - Step 5: audit fix. Reminders, bot state, sent jobs and cleanup undo now save through write_json_atomic,
-  so a power cut cannot leave half a file (which loaded as empty and wiped reminders). Tests: 692 passed.
+  so a power cut cannot leave half a file (which loaded as empty and wiped reminders).
+- Step 6: smoke test on real Ollama: 175 notes in 15 s, 2.5 MB. Small words (STOPWORDS) no longer count in
+  the exact-word score; "how to stay motivated" now finds the habit notes. Tests: 693 passed.
 
 ## Next step
 - PR 2: call sync after save, /redo and cleanup. PR 3: /search command. PR 4: chat.

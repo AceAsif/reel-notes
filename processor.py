@@ -1967,7 +1967,9 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 def meaning_search(query: str, limit: int = 5) -> list[dict]:
     """Mix meaning (0.7) and exact words (0.3, scaled to 0-1). Exact words only if Ollama is down."""
-    exact = {r["path"].name: r for r in search_notes(query, limit=10_000, match_all=False)}
+    # small words ("how", "to") match every note, so they would drown the exact-word score
+    keywords = " ".join(w for w in query.split() if w.lower() not in STOPWORDS)
+    exact = {r["path"].name: r for r in search_notes(keywords, limit=10_000, match_all=False)}
     top = max((r["score"] for r in exact.values()), default=0) or 1
     try:
         notes = sync_search_index()["notes"]
