@@ -2262,7 +2262,7 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+    write_json_atomic(STATE_FILE, state)
 
 
 # ---- what you need to do an action: link and key points ----------------------------------
@@ -2320,9 +2320,8 @@ def skip_with_undo(ids: list[str]) -> list[str]:
             saved.append({"path": a["path"].name, "line": line})
     skipped = skip_actions_by_id(ids)
     if skipped:
-        CLEANUP_UNDO_FILE.write_text(json.dumps({"when": datetime.now().isoformat(timespec="seconds"),
-                                                 "items": saved}, ensure_ascii=False, indent=1),
-                                     encoding="utf-8")
+        write_json_atomic(CLEANUP_UNDO_FILE, {"when": datetime.now().isoformat(timespec="seconds"),
+                                              "items": saved})
     return skipped
 
 
@@ -2571,8 +2570,7 @@ def load_reminders() -> list[dict]:
 
 
 def save_reminders(reminders: list[dict]) -> None:
-    REMINDERS_FILE.write_text(json.dumps(reminders, indent=2, ensure_ascii=False),
-                              encoding="utf-8")
+    write_json_atomic(REMINDERS_FILE, reminders)
 
 
 def add_reminder(action: dict, when: datetime) -> dict:
@@ -2610,7 +2608,7 @@ def load_sent_jobs() -> dict:
 
 
 def save_sent_jobs(sent: dict) -> None:
-    SENT_JOBS_FILE.write_text(json.dumps(sent, indent=2), encoding="utf-8")
+    write_json_atomic(SENT_JOBS_FILE, sent)
 
 
 def last_slot(rule: dict, now: datetime) -> date | None:

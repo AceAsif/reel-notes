@@ -10,7 +10,9 @@ Last updated: 2026-11-28
   `embed` adds "search_document: " / "search_query: ".
 - Step 3: processor.py. `meaning_search`: 0.7 x cosine + 0.3 x exact-word score (scaled to 0-1 by the top
   score). If Ollama is down it falls back to exact words.
-- Step 4: the index file added to .gitignore, the hook lists and CLAUDE.md. Embeds in batches of 32, saved after each. Tests: 691 passed.
+- Step 4: the index file added to .gitignore, the hook lists and CLAUDE.md. Embeds in batches of 32, saved after each.
+- Step 5: audit fix. Reminders, bot state, sent jobs and cleanup undo now save through write_json_atomic,
+  so a power cut cannot leave half a file (which loaded as empty and wiped reminders). Tests: 692 passed.
 
 ## Next step
 - PR 2: call sync after save, /redo and cleanup. PR 3: /search command. PR 4: chat.

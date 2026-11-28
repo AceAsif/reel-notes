@@ -14,7 +14,7 @@ cleanup_undo.json
 bot_state.json
 link_index.json
 search_index.json
-search_index.json.tmp
+*.json.tmp
 
 .claude/settings.local.json
 tools-export.csv
