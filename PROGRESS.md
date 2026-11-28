@@ -1,3 +1,23 @@
+# Progress - safe writes for notes and state files
+Branch: fix/safe-writes
+Last updated: 2026-11-28
+
+## Done
+- Step 1: processor.py. New `write_text_atomic(path, text)`: temp file in the same folder, then
+  os.replace. `write_json_atomic` calls it. Every in-place note write uses it (12 places: tick, skip,
+  priority, learning, save_note, cleanup undo, replace_note, carry_over).
+- Step 2: processor.py. New `load_json_backed_up`: when reminders, bot state or sent jobs can't be
+  read, it logs a WARNING and moves the file to `<name>.broken-<time>` (moved, so reads do not pile up copies) before going on with empty.
+  `*.broken-*` added to .gitignore.
+- Step 3: tests: a failed swap leaves the old note intact; a broken reminders file is backed up.
+  Tests: 698 passed.
+
+## Next step
+- Owner: merge. If a `.broken-` file ever shows up, open it to get the old reminders back.
+
+## Decisions
+- Temp files are `<name>.tmp` next to the target, so os.replace stays on one drive.
+
 # Progress - search by meaning, PR 1: the index
 Branch: feature/search-index
 Last updated: 2026-11-28
