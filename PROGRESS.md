@@ -19,6 +19,9 @@ Last updated: 2026-11-28
 - Step 6: tests (resources, file name, summary, tags, ranking, filler words, pick list, one note with two
   actions, 5 closest + Cancel). Tests: 666 passed. Simulator (local qwen3:8b): 9 of 9 pass.
 
+- Step 7: merged main (PR #39, no more empty Action items). Only PROGRESS.md had a conflict; both
+  logs are kept (main's is in git history).
+
 ## Next step
 - Owner: merge, pull, restart. Say "I have completed the Hallmark task".
 

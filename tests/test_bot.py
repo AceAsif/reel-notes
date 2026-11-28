@@ -896,3 +896,12 @@ def test_tools_shows_tool_model_repo_and_all_shows_everything(monkeypatch, args,
                                "tool 1, model 1, repo 1, language 1, course 0, company 1, channel 0, other 0\n")
     else:
         assert text.startswith("🧰 Tools in your notes: 3\n")
+
+
+def test_reply_says_when_a_default_action_was_added(tmp_path):
+    data = {"title": "T", "category": "tech", "summary": "s", "key_points": [], "resources": [],
+            "action_items": [{"text": "Review this note", "priority": "normal", "kind": "lookup"}],
+            "default_action": True}
+    assert "⚠️ No action found, added a default" in bot.format_reply(data, tmp_path / "n.md")
+    data.pop("default_action")
+    assert "No action found" not in bot.format_reply(data, tmp_path / "n.md")
