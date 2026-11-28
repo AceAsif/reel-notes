@@ -394,7 +394,7 @@ async def redo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"Make this note again from its saved text with {processor.OLLAMA_MODEL}? "
             f"No download, so it is fast.\n\n📝 {title}\n\n"
-            "The old note moves to the “old” folder (not deleted). It keeps its date and tags. "
+            "The new text replaces the note in the same file. It keeps its date and tags. "
             "Done and skipped actions and your learnings are kept. "
             "Open actions are made new by the AI (their due dates and reminders are not kept).",
             reply_markup=buttons)
@@ -411,8 +411,8 @@ async def redo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                      InlineKeyboardButton("Cancel", callback_data="redo:no")]])
     await update.message.reply_text(
         f"Make this note again with {processor.OLLAMA_MODEL}?\n\n📝 {title}\n{source}\n\n"
-        "The old note moves to the “old” folder (not deleted). "
-        "Ticked actions in it won't carry over.", reply_markup=buttons)
+        "The new text replaces the note in the same file. "
+        "Done and skipped actions and your learnings are kept.", reply_markup=buttons)
 
 
 async def redo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -444,10 +444,9 @@ async def redo_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
     old = path.with_suffix(".redo")          # hide it so the duplicate check doesn't stop us
     path.replace(old)
     new_note = await note_from_link(query.message, url)
-    if new_note:
-        processor.archive_note(old)
-    else:
-        old.replace(path)                   # failed: put the old note back
+    old.replace(path)                       # the old file back in its place
+    if new_note:                            # same file name: the new text replaces the old
+        processor.replace_note(path, path.read_text(encoding="utf-8"), new_note)
 
 
 # ---- /health and yt-dlp updates ----------------------------------------------
