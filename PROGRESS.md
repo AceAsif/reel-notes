@@ -1,3 +1,25 @@
+# Progress - search by meaning, PR 1: the index
+Branch: feature/search-index
+Last updated: 2026-11-28
+
+## Done
+- Step 1: processor.py. New `write_json_atomic` (temp file + os.replace). The link index uses it too.
+- Step 2: processor.py. `search_index.json` holds `{model, notes: {file: {hash, vector}}}`. `sync_search_index`
+  embeds only new or changed notes (title, summary, key points, resources; no transcript), drops deleted
+  ones, and rebuilds when `EMBED_MODEL` (default nomic-embed-text) changes or the file is broken.
+  `embed` adds "search_document: " / "search_query: ".
+- Step 3: processor.py. `meaning_search`: 0.7 x cosine + 0.3 x exact-word score (scaled to 0-1 by the top
+  score). If Ollama is down it falls back to exact words.
+- Step 4: the index file added to .gitignore, the hook lists and CLAUDE.md. Tests: 690 passed.
+
+## Next step
+- PR 2: call sync after save, /redo and cleanup. PR 3: /search command. PR 4: chat.
+- Owner: run `ollama pull nomic-embed-text`.
+
+## Decisions
+- No bot code yet, so the chat simulator was not run.
+- Only notes in the top notes folder are indexed (same as search_notes).
+
 # Progress - /redo keeps one file, and links inside a repo join the repo line
 Branch: fix/redo-and-repo-links
 Last updated: 2026-11-28

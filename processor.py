@@ -7,6 +7,7 @@ Pipeline (all free, all local):
         -> markdown file in NOTES_DIR
 """
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -1254,9 +1255,16 @@ def _index_entry(label: str, path: Path) -> tuple[str, dict] | None:
     return normalise_url(source), {"file": path.name, "saved": f"{saved:%Y-%m-%d %H:%M}", "folder": label}
 
 
+def write_json_atomic(path: Path, data) -> None:
+    """Write JSON to a temp file, then swap it in, so a crash never leaves half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _save_link_index(data: dict) -> None:
     try:
-        LINK_INDEX_FILE.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(LINK_INDEX_FILE, data)
     except OSError as exc:
         _log_notes(f"could not save {LINK_INDEX_FILE.name}: {exc!r}")
 
@@ -1888,6 +1896,90 @@ def search_notes(query: str, limit: int = 15, match_all: bool = True) -> list[di
                     snippet = make_snippet(line, words[0])
         results.append({"path": note, "title": title, "date": note.name[:10],
                         "snippet": snippet, "score": score})
+    results.sort(key=lambda r: (r["score"], r["path"].name), reverse=True)
+    return results[:limit]
+
+
+# ---- Search by meaning: search_index.json ---------------------------------------------------
+# search_index.json is private (it holds a vector per note file). Each entry keeps a hash of the
+# embedded text, so only new or changed notes are embedded again. A new model rebuilds it all.
+
+SEARCH_INDEX_FILE = Path(os.getenv("SEARCH_INDEX_FILE", "search_index.json"))
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+EMBED_SECTIONS = ("Summary", "Key points", "Resources")
+MEANING_WEIGHT = 0.7                     # the rest (0.3) is the exact-word score
+
+
+def note_embed_text(path: Path) -> str:
+    """Title, summary, key points and resources. Not the long transcript."""
+    s = note_sections(path)
+    return "\n".join([s["title"], *(l for sec in EMBED_SECTIONS for l in s.get(sec, []))])
+
+
+def embed(texts: list[str], prefix: str) -> list[list[float]]:
+    """nomic-embed-text wants 'search_document: ' or 'search_query: ' in front. Raises if Ollama is down."""
+    r = requests.post(f"{OLLAMA_URL}/api/embed", timeout=120,
+                      json={"model": EMBED_MODEL, "input": [prefix + t for t in texts]})
+    r.raise_for_status()
+    return r.json()["embeddings"]
+
+
+def sync_search_index() -> dict:
+    """Load the index, embed new or changed notes, drop deleted ones. Saves only if it changed."""
+    try:
+        data = json.loads(SEARCH_INDEX_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict) or data.get("model") != EMBED_MODEL:
+        data = {"model": EMBED_MODEL, "notes": {}}
+    old = data["notes"]
+    notes, todo = {}, []
+    for path in sorted(NOTES_DIR.glob("*.md")) if NOTES_DIR.exists() else []:
+        text = note_embed_text(path)
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        entry = old.get(path.name)
+        if entry and entry.get("hash") == digest:
+            notes[path.name] = entry
+        else:
+            todo.append((path.name, digest, text))
+    if todo:
+        vectors = embed([t for _, _, t in todo], "search_document: ")
+        for (name, digest, _), vec in zip(todo, vectors):
+            notes[name] = {"hash": digest, "vector": vec}
+    if todo or notes.keys() != old.keys():
+        data["notes"] = notes
+        try:
+            write_json_atomic(SEARCH_INDEX_FILE, data)
+        except OSError as exc:
+            _log_notes(f"could not save {SEARCH_INDEX_FILE.name}: {exc!r}")
+    return data
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = (sum(x * x for x in a) * sum(y * y for y in b)) ** 0.5
+    return dot / norm if norm else 0.0
+
+
+def meaning_search(query: str, limit: int = 5) -> list[dict]:
+    """Mix meaning (0.7) and exact words (0.3, scaled to 0-1). Exact words only if Ollama is down."""
+    exact = {r["path"].name: r for r in search_notes(query, limit=10_000, match_all=False)}
+    top = max((r["score"] for r in exact.values()), default=0) or 1
+    try:
+        notes = sync_search_index()["notes"]
+        qvec = embed([query], "search_query: ")[0]
+    except (requests.RequestException, KeyError, ValueError, IndexError) as exc:
+        _log_notes(f"meaning search off, using exact words: {exc!r}")
+        return [dict(r, score=r["score"] / top) for r in list(exact.values())[:limit]]
+    results = []
+    for name, entry in notes.items():
+        word = exact[name]["score"] / top if name in exact else 0.0
+        path = NOTES_DIR / name
+        lines = path.read_text(encoding="utf-8").splitlines()
+        results.append({"path": path, "title": lines[0].lstrip("# ").strip() if lines else path.stem,
+                        "date": name[:10], "snippet": exact[name]["snippet"] if name in exact else "",
+                        "score": MEANING_WEIGHT * _cosine(qvec, entry["vector"])
+                                 + (1 - MEANING_WEIGHT) * word})
     results.sort(key=lambda r: (r["score"], r["path"].name), reverse=True)
     return results[:limit]
 
