@@ -925,19 +925,32 @@ def chat_action_buttons(mark: str) -> InlineKeyboardMarkup:
                                   InlineKeyboardButton("Cancel", callback_data="chatact:no")]])
 
 
+def pick_buttons(actions: list[dict]) -> InlineKeyboardMarkup:
+    """One button per action (pressing it asks Yes/Cancel next), and Cancel."""
+    def label(a):
+        text = a["action"] if len(a["action"]) <= 40 else a["action"][:39] + "…"
+        return f"{text} ({a['title'][:20]})"
+    rows = [[InlineKeyboardButton(label(a), callback_data=f"chatact:pick:{k}")] for k, a in enumerate(actions)]
+    return InlineKeyboardMarkup(rows + [[InlineKeyboardButton("Cancel", callback_data="chatact:no")]])
+
+
 async def offer_chat_action(message, context, mark: str, words: str) -> None:
-    """"I finished the Hallmark task": show the best matching open action with buttons.
-    Nothing changes until "Yes" is pressed."""
+    """"I finished the Hallmark task": one match -> Yes / Not this one / Cancel. Several matches,
+    or none (then the 5 closest actions) -> a button per action. Nothing changes until "Yes"."""
     found = processor.match_actions(words) if words else []
-    if not found:
-        await message.reply_text(
-            f"I couldn't find an open action that matches \"{words}\". "
-            "Send /todo to see the list, then /done 2." if words else
-            "Which action? Say its name, e.g. \"I finished the Strix task\", or send /todo.")
+    shown = found or processor.closest_actions(words)
+    if not shown:
+        await message.reply_text("You have no open actions. 🎉")
         return
-    context.user_data["chat_action"] = {"mark": mark, "ids": [processor.action_id(a) for a in found], "i": 0}
-    more = f"\n\n({len(found)} actions match. \"Not this one\" shows the next.)" if len(found) > 1 else ""
-    await message.reply_text(chat_action_text(mark, found[0]) + more, reply_markup=chat_action_buttons(mark))
+    context.user_data["chat_action"] = {"mark": mark, "ids": [processor.action_id(a) for a in shown], "i": 0}
+    if len(found) == 1:
+        await message.reply_text(chat_action_text(mark, found[0]), reply_markup=chat_action_buttons(mark))
+        return
+    verb = "tick off" if mark == "x" else "skip"
+    head = (f"{len(found)} open actions match \"{words}\". Which one do you want to {verb}?" if found else
+            (f"I couldn't find an open action that matches \"{words}\". Is it one of these?" if words
+             else f"Which action do you want to {verb}?"))
+    await message.reply_text(head, reply_markup=pick_buttons(shown))
 
 
 async def chat_action_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -953,6 +966,16 @@ async def chat_action_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query.data == "chatact:no":
         context.user_data.pop("chat_action", None)
         await query.edit_message_text("OK, nothing changed.")
+        return
+    if query.data.startswith("chatact:pick:"):          # a button from the list: confirm it first
+        k = int(query.data.rsplit(":", 1)[1])
+        found = processor.find_action(offer["ids"][k]) if 0 <= k < len(offer["ids"]) else None
+        if not found:
+            await query.edit_message_text("That action is already done or gone. Nothing changed.")
+            return
+        offer["i"] = k
+        await query.edit_message_text(chat_action_text(offer["mark"], found[1]),
+                                      reply_markup=chat_action_buttons(offer["mark"]))
         return
     if query.data == "chatact:next":
         offer["i"] += 1

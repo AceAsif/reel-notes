@@ -130,33 +130,83 @@ def test_show_note_opens_the_best_note(notes, monkeypatch):
     assert chat.replies[0][0].startswith("# Strix security")
 
 
-def test_no_match_says_so_and_points_to_todo(notes, monkeypatch):
+def test_no_match_shows_the_closest_actions_as_buttons(notes, monkeypatch):
     path = make_note("Strix security", ["Run Strix on my repo"], "https://x.com/a/status/2")
-    ai_says(monkeypatch, "done", "Hallmark")
+    for n in range(6):
+        make_note(f"Note {n}", [f"Read chapter {n}"], f"https://x.com/a/status/{10 + n}")
+    ai_says(monkeypatch, "done", "guitar practice")
     chat = Chat()
-    chat.send("I finished the Hallmark task")
+    chat.send("I finished the guitar practice task")
     text, markup = chat.replies[0]
-    assert "couldn't find" in text and "/todo" in text and markup is None
-    assert box(path, "Run Strix on my repo") == "- [ ]"
+    assert "couldn't find" in text and "Is it one of these?" in text
+    data = [row[0].callback_data for row in markup.inline_keyboard]
+    assert data == [f"chatact:pick:{k}" for k in range(5)] + ["chatact:no"]       # 5 closest + Cancel
+    assert box(path, "Run Strix on my repo") == "- [ ]"                            # nothing changed
 
 
-def test_two_matches_not_this_one_shows_the_next(notes, monkeypatch):
+def test_two_notes_match_each_action_is_a_button_and_a_pick_asks_first(notes, monkeypatch):
     first = make_note("Strix security", ["Run Strix on my repo"], "https://x.com/a/status/1")
     second = make_note("Strix part two", ["Read the Strix docs"], "https://x.com/a/status/2")
     ai_says(monkeypatch, "done", "Strix")
     chat = Chat()
     chat.send("done with the strix one")
-    assert "2 actions match" in chat.replies[0][0]
-    shown_first = chat.replies[0][0]
-    chat.press("chatact:next")
-    assert chat.edits[-1][0] != shown_first and "Strix" in chat.edits[-1][0]
+    text, markup = chat.replies[0]
+    assert text.startswith('2 open actions match "Strix"')
+    labels = [row[0].text for row in markup.inline_keyboard]
+    assert labels[-1] == "Cancel" and len(labels) == 3
+    pick = next(k for k, l in enumerate(labels) if l.startswith("Read the Strix docs"))
+    chat.press(f"chatact:pick:{pick}")
+    assert "Read the Strix docs" in chat.edits[-1][0]                              # confirm first
+    assert box(second, "Read the Strix docs") == "- [ ]"
     chat.press("chatact:yes")
-    texts = first.read_text(encoding="utf-8") + second.read_text(encoding="utf-8")
-    assert texts.count("- [x] ") == 1 and texts.count("- [ ] ") == 1     # only the second one shown
-    chat2 = Chat()
-    chat2.send("done with the strix one")
-    chat2.press("chatact:next")
-    assert chat2.edits[-1][0].startswith("No other match. Nothing changed.")
+    assert box(second, "Read the Strix docs") == "- [x]" and box(first, "Run Strix on my repo") == "- [ ]"
+
+
+def test_one_note_with_several_actions_shows_each(notes, monkeypatch):
+    make_note("Strix security", ["Run Strix on my repo", "Read the Strix report"], "https://x.com/a/status/1")
+    ai_says(monkeypatch, "skip", "Strix")
+    chat = Chat()
+    chat.send("skip the strix one")
+    labels = [row[0].text for row in chat.replies[0][1].inline_keyboard]
+    assert [l.split(" (")[0] for l in labels[:-1]] == ["Run Strix on my repo", "Read the Strix report"]
+
+
+def make_rich_note(title, action, source, resources=(), tags=(), summary="s"):
+    data = {"title": title, "category": "tech", "summary": summary, "key_points": ["k"],
+            "resources": list(resources), "tags": list(tags), "claims": [],
+            "action_items": p.clean_actions([action]), "quote": "", "lesson": "", "habit": ""}
+    return p.save_note(data, "transcript", "screen", source)
+
+
+def test_word_only_in_resources_matches(notes):
+    make_rich_note("Claude Code Makes Premium Websites", "Build a landing page with Claude Code",
+                   "https://x.com/a/status/1", resources=[{"name": "hallmark",
+                                                          "link": "https://github.com/Nutlope/hallmark"}])
+    make_rich_note("Strix security", "Run Strix on my repo", "https://x.com/a/status/2")
+    assert [a["action"] for a in p.match_actions("I have completed the Hallmark task")] == \
+        ["Build a landing page with Claude Code"]
+
+
+def test_word_only_in_file_name_summary_or_tags_matches(notes):
+    path = make_rich_note("Weekly planning tips", "Plan next week on Sunday", "https://x.com/a/status/1")
+    path.rename(path.with_name("2026-01-01_0900_orbit-planner.md"))
+    make_rich_note("Sleep better", "Go to bed at ten", "https://x.com/a/status/2", summary="A zenith routine.")
+    make_rich_note("Morning", "Drink water first", "https://x.com/a/status/3", tags=["hydration"])
+    assert [a["action"] for a in p.match_actions("orbit")] == ["Plan next week on Sunday"]
+    assert [a["action"] for a in p.match_actions("zenith")] == ["Go to bed at ten"]
+    assert [a["action"] for a in p.match_actions("hydration")] == ["Drink water first"]
+
+
+def test_action_and_title_matches_rank_above_resource_matches(notes):
+    make_rich_note("Video tools", "Install the editor", "https://x.com/a/status/1",
+                   resources=[{"name": "Remotion", "link": "https://www.remotion.dev"}])
+    make_rich_note("Remotion basics", "Make a 10 second intro", "https://x.com/a/status/2")
+    assert [a["action"] for a in p.match_actions("remotion")] == ["Make a 10 second intro", "Install the editor"]
+
+
+def test_filler_words_alone_match_nothing(notes):
+    make_rich_note("Strix security", "Run Strix on my repo", "https://x.com/a/status/1")
+    assert p.match_actions("I have completed the task") == []
 
 
 def test_cancel_changes_nothing(notes, monkeypatch):
