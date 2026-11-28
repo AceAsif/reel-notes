@@ -117,9 +117,9 @@ def test_exact_words_scaled_and_mixed(notes, monkeypatch):
     write(folder, "2026-11-01 a.md", "Coding coding", "coding")
     write(folder, "2026-11-02 b.md", "Coding", "x")
     monkeypatch.setattr(p, "embed", lambda texts, prefix: [[1.0, 0.0, 0.0] for _ in texts])
-    found = p.meaning_search("coding")           # same meaning score: more words wins
+    found = p.meaning_search("coding")           # same meaning (no spread, so 0): more words wins
     assert found[0]["path"].name == "2026-11-01 a.md"
-    assert found[0]["score"] == pytest.approx(1.0)
+    assert found[0]["score"] == pytest.approx(0.3) and 0 < found[1]["score"] < 0.3
 
 
 def test_small_words_do_not_count_as_exact_matches(notes, monkeypatch):
@@ -128,7 +128,7 @@ def test_small_words_do_not_count_as_exact_matches(notes, monkeypatch):
     write(folder, "2026-11-02 b.md", "Diagrams", "draw diagrams")
     monkeypatch.setattr(p, "embed", lambda texts, prefix: [[1.0, 0.0, 0.0] for _ in texts])
     found = p.meaning_search("how to draw diagrams")
-    assert found[0]["title"] == "Diagrams" and found[1]["score"] == pytest.approx(0.7)
+    assert found[0]["title"] == "Diagrams" and found[1]["score"] == 0.0
 
 
 def test_falls_back_to_exact_words_when_ollama_is_down(notes, monkeypatch):
@@ -150,3 +150,36 @@ def test_hook_treats_index_as_private():
     spec.loader.exec_module(hook)
     assert "search_index.json" in hook.PRIVATE_NAMES
     assert hook.PRIVATE_IN_COMMAND_RE.search("cat search_index.json")
+
+
+def test_meaning_scores_spread_to_0_1(notes):
+    folder, _ = notes
+    write(folder, "2026-11-01 a.md", "Pasta", "A recipe")
+    write(folder, "2026-11-02 b.md", "Python", "Coding tips")
+    found = p.meaning_search("cooking")
+    assert [r["score"] for r in found] == pytest.approx([0.7, 0.0])
+
+
+def test_unchanged_files_are_not_read_again(notes, monkeypatch):
+    folder, _ = notes
+    a = write(folder, "2026-11-01 a.md", "Pasta", "A recipe")
+    p.sync_search_index()
+    read = []
+    real = p.note_embed_text
+    monkeypatch.setattr(p, "note_embed_text", lambda path: read.append(path.name) or real(path))
+    p.sync_search_index()
+    assert read == []                            # same mtime and size: not opened
+    a.write_text(a.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    p.sync_search_index()
+    assert read == [a.name]
+
+
+def test_embed_keeps_model_loaded(monkeypatch):
+    sent = {}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"embeddings": [[1.0]]}
+    monkeypatch.setattr(p.requests, "post", lambda url, json, timeout: sent.update(json) or R())
+    p.embed(["x"], "search_query: ")
+    assert sent["keep_alive"] and sent["input"] == ["search_query: x"]

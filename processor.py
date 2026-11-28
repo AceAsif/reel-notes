@@ -1919,13 +1919,15 @@ def note_embed_text(path: Path) -> str:
 def embed(texts: list[str], prefix: str) -> list[list[float]]:
     """nomic-embed-text wants 'search_document: ' or 'search_query: ' in front. Raises if Ollama is down."""
     r = requests.post(f"{OLLAMA_URL}/api/embed", timeout=120,
-                      json={"model": EMBED_MODEL, "input": [prefix + t for t in texts]})
+                      json={"model": EMBED_MODEL, "input": [prefix + t for t in texts],
+                            "keep_alive": "30m"})      # stay loaded: a cold load adds ~3 s per search
     r.raise_for_status()
     return r.json()["embeddings"]
 
 
 def sync_search_index() -> dict:
-    """Load the index, embed new or changed notes, drop deleted ones. Saves only if it changed."""
+    """Load the index, embed new or changed notes, drop deleted ones. Saves only if it changed.
+    A note is read again only when its modified time or size changed."""
     try:
         data = json.loads(SEARCH_INDEX_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1933,24 +1935,31 @@ def sync_search_index() -> dict:
     if not isinstance(data, dict) or data.get("model") != EMBED_MODEL:
         data = {"model": EMBED_MODEL, "notes": {}}
     old = data["notes"]
-    notes, todo = {}, []
+    notes, todo, touched = {}, [], False
     for path in sorted(NOTES_DIR.glob("*.md")) if NOTES_DIR.exists() else []:
+        st = path.stat()
+        stamp = [st.st_mtime_ns, st.st_size]
+        entry = old.get(path.name)
+        if entry and entry.get("stamp") == stamp:
+            notes[path.name] = entry
+            continue
         text = note_embed_text(path)
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
-        entry = old.get(path.name)
-        if entry and entry.get("hash") == digest:
-            notes[path.name] = entry
+        if entry and entry.get("hash") == digest:   # touched, but the embedded part is the same
+            notes[path.name] = dict(entry, stamp=stamp, title=text.split("\n", 1)[0])
+            touched = True
         else:
-            todo.append((path.name, digest, text))
+            todo.append((path.name, digest, text, stamp))
     # batches, each saved, so a slow first build keeps its progress if a request times out
     batches = [todo[i:i + 32] for i in range(0, len(todo), 32)]
-    if not batches and notes.keys() != old.keys():
-        batches = [[]]                           # only deletions: save once
+    if not batches and (touched or notes.keys() != old.keys()):
+        batches = [[]]                           # nothing to embed, but save once
     for batch in batches:
         if batch:
-            vectors = embed([t for _, _, t in batch], "search_document: ")
-            for (name, digest, _), vec in zip(batch, vectors):
-                notes[name] = {"hash": digest, "vector": vec}
+            vectors = embed([t for _, _, t, _ in batch], "search_document: ")
+            for (name, digest, text, stamp), vec in zip(batch, vectors):
+                notes[name] = {"hash": digest, "stamp": stamp, "title": text.split("\n", 1)[0],
+                               "vector": vec}
         data["notes"] = notes
         try:
             write_json_atomic(SEARCH_INDEX_FILE, data)
@@ -1965,10 +1974,13 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / norm if norm else 0.0
 
 
+# "free" and "ai" are in most notes here, so they say nothing in the exact-word score
+SEARCH_STOPWORDS = {"free", "ai"}   # added to STOPWORDS, which is defined further down
+
+
 def meaning_search(query: str, limit: int = 5) -> list[dict]:
-    """Mix meaning (0.7) and exact words (0.3, scaled to 0-1). Exact words only if Ollama is down."""
-    # small words ("how", "to") match every note, so they would drown the exact-word score
-    keywords = " ".join(w for w in query.split() if w.lower() not in STOPWORDS)
+    """Mix meaning (0.7) and exact words (0.3), both scaled to 0-1. Exact words only if Ollama is down."""
+    keywords = " ".join(w for w in query.split() if w.lower() not in STOPWORDS | SEARCH_STOPWORDS)
     exact = {r["path"].name: r for r in search_notes(keywords, limit=10_000, match_all=False)}
     top = max((r["score"] for r in exact.values()), default=0) or 1
     try:
@@ -1977,14 +1989,16 @@ def meaning_search(query: str, limit: int = 5) -> list[dict]:
     except (requests.RequestException, KeyError, ValueError, IndexError) as exc:
         _log_notes(f"meaning search off, using exact words: {exc!r}")
         return [dict(r, score=r["score"] / top) for r in list(exact.values())[:limit]]
+    meaning = {name: _cosine(qvec, e["vector"]) for name, e in notes.items()}
+    # cosines bunch up (0.6-0.75), so spread them to 0-1 or the exact-word part decides alone
+    low, high = min(meaning.values(), default=0), max(meaning.values(), default=0)
+    spread = (high - low) or 1
     results = []
     for name, entry in notes.items():
         word = exact[name]["score"] / top if name in exact else 0.0
-        path = NOTES_DIR / name
-        lines = path.read_text(encoding="utf-8").splitlines()
-        results.append({"path": path, "title": lines[0].lstrip("# ").strip() if lines else path.stem,
+        results.append({"path": NOTES_DIR / name, "title": entry.get("title", name),
                         "date": name[:10], "snippet": exact[name]["snippet"] if name in exact else "",
-                        "score": MEANING_WEIGHT * _cosine(qvec, entry["vector"])
+                        "score": MEANING_WEIGHT * (meaning[name] - low) / spread
                                  + (1 - MEANING_WEIGHT) * word})
     results.sort(key=lambda r: (r["score"], r["path"].name), reverse=True)
     return results[:limit]
