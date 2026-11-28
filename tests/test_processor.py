@@ -1457,3 +1457,12 @@ def test_tools_still_reads_a_line_with_also_links(tmp_path, monkeypatch):
                                    " · also: https://github.com/Nutlope/hallmark/blob/main/SKILL.md\n",
                                    encoding="utf-8")
     assert p.all_tools() == [("Hallmark", "https://github.com/Nutlope/hallmark", 1, "repo")]
+
+
+def test_state_saves_never_leave_half_a_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "REMINDERS_FILE", tmp_path / "r.json")
+    p.save_reminders([{"action_id": "a", "text": "t", "when": "2026-11-28T09:00"}])
+    monkeypatch.setattr(p.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("power cut")))
+    with pytest.raises(OSError):
+        p.save_reminders([])
+    assert len(p.load_reminders()) == 1   # the old reminders are still there

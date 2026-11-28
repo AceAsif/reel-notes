@@ -13,6 +13,8 @@ sent_jobs.json
 cleanup_undo.json
 bot_state.json
 link_index.json
+search_index.json
+*.json.tmp
 
 .claude/settings.local.json
 tools-export.csv

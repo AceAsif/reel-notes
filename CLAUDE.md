@@ -39,7 +39,8 @@ items, and helps the user DO the actions. Read `docs/HANDOVER.md` first, then `R
 - The bot runs on a normal PC that is not always on. Do not suggest always-on hosting.
 - Do not suggest anything that needs an Instagram or Facebook login or cookies.
 - Never read, print or commit private files: `.env`, `notes/`, `bot.log`, `cookies.txt`,
-  `reminders.json`, `sent_jobs.json`, `bot_state.json`, `cleanup_undo.json`, `link_index.json`.
+  `reminders.json`, `sent_jobs.json`, `bot_state.json`, `cleanup_undo.json`, `link_index.json`,
+  `search_index.json`.
   The real notes folder is outside the repo. Do not open it.
 - Never put a token or private data in the repo, in a test, or in a message.
 - Keep personal details out of the repo (names, paths, location, language, hardware).
