@@ -1,0 +1,12 @@
+# Chat scenarios for tools/chat_sim.py (runs on SAMPLE notes, with the real local Ollama model).
+#   python tools/chat_sim.py --file tests/chat_scenarios.txt
+# Format:  message || expected intent || text the reply must contain || button to press
+# The sample notes have these open actions: "Send a Hallmark card to a friend",
+# "Try the BLA command line", "Run Strix on my repo".
+
+I finished the Hallmark task || done || Ticked: Send a Hallmark card to a friend || ✅ Yes, tick it
+skip the BLA one || skip || Skipped: Try the BLA command line || ⏭ Yes, skip it
+show my todo list || todo || Run Strix on my repo
+what tools do I have || tools || Strix
+I finished the guitar practice task || done || couldn't find
+what is Strix used for? || chat || Strix
