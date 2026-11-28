@@ -5,6 +5,7 @@
 # "Try the BLA command line", "Run Strix on my repo".
 
 I finished the Hallmark task || done || Ticked: Send a Hallmark card to a friend || ✅ Yes, tick it
+I have completed the Hallmark task || done || Ticked: Send a Hallmark card to a friend || ✅ Yes, tick it
 skip the BLA one || skip || Skipped: Try the BLA command line || ⏭ Yes, skip it
 show my todo list || todo || Run Strix on my repo
 what tools do I have || tools || Strix

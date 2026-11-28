@@ -13,6 +13,7 @@ import processor as p  # noqa: E402
 INTENTS = {"I finished the Hallmark task": ("done", "Hallmark"), "skip the BLA one": ("skip", "BLA"),
            "show my todo list": ("todo", ""), "what tools do I have": ("tools", ""),
            "I finished the guitar practice task": ("done", "guitar practice"),
+           "I have completed the Hallmark task": ("done", "Hallmark"),
            "what is Strix used for?": ("chat", "Strix")}
 
 
@@ -29,7 +30,7 @@ def mocked_ai(monkeypatch):
 def test_all_scenarios_pass_with_a_well_behaved_model(mocked_ai, capsys):
     assert chat_sim.main(["--file", str(ROOT / "tests" / "chat_scenarios.txt")]) == 0
     out = capsys.readouterr().out
-    assert out.count("PASS") >= 6 and "FAIL" not in out
+    assert out.count("PASS") >= 7 and "FAIL" not in out
     assert "[buttons: ✅ Yes, tick it | Not this one | Cancel]" in out
     assert "| Message | Intent | Reply | Result |" in out
 

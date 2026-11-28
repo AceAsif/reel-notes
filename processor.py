@@ -1101,11 +1101,6 @@ def process_videos(videos: list[Path], source: str = "", caption: str = "",
     return save_note(data, transcript, screen, source, language, caption), data
 
 
-def process_video(video: Path, source: str = "") -> tuple[Path, dict]:
-    """One video file (kept for older code paths)."""
-    return process_videos([video], source)
-
-
 YOUTUBE_ID_RE = re.compile(
     r"(?:youtube\.com/(?:shorts/|watch\?(?:.*&)?v=|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
 
@@ -1125,8 +1120,9 @@ def normalise_url(url: str) -> str:
     Short links (vm.tiktok.com, share links) can't be opened without the internet, so they
     stay as URLs."""
     url = url.strip()
-    if threads_link.dedupe_key(url):
-        return threads_link.dedupe_key(url)
+    threads_key = threads_link.dedupe_key(url)
+    if threads_key:
+        return threads_key
     x = X_STATUS_RE.match(url)
     if x:
         return "x:" + x.group(1)                 # x.com, twitter.com and mobile links: same post
@@ -1592,13 +1588,19 @@ def tool_type(name: str, link: str) -> str:
     return "repo" if GITHUB_REPO_RE.search(link) else "tool"
 
 
+def catalog_maps(catalog: dict | None = None) -> tuple[dict, dict, set]:
+    """(aliases, entries, stoplist), keyed by squash(name). One place, so /tools and new notes
+    always clean names the same way."""
+    cat = catalog if catalog is not None else load_tool_catalog()
+    return ({squash(k): v for k, v in cat.get("aliases", {}).items()},
+            {squash(k): (k, v) for k, v in cat.get("entries", {}).items()},
+            {squash(s) for s in cat.get("stoplist", [])})
+
+
 def clean_tools(raw: list[tuple[str, str, str]], catalog: dict | None = None) -> list[tuple]:
     """(name, link, note file) rows -> (name, link or 'No repo found', notes count, type).
     Folds aliases and 'X GitHub'-style names into one tool, drops stoplist names and bad links."""
-    cat = catalog if catalog is not None else load_tool_catalog()
-    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
-    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
-    stop = {squash(s) for s in cat.get("stoplist", [])}
+    aliases, entries, stop = catalog_maps(catalog)
     groups: dict[str, dict] = {}
     for name, link, note in raw:
         name, link = name.replace("�", "").strip(), link.strip()
@@ -1640,10 +1642,7 @@ def clean_resources(resources: list, catalog: dict | None = None) -> list:
     """A new note's resources, cleaned with the /tools catalog rules: alias -> one name, stoplist,
     file names and non-tool types (company, course, language...) dropped, the catalog link used.
     Any other link must already be one the video showed (drop_invented_links runs first)."""
-    cat = catalog if catalog is not None else load_tool_catalog()
-    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
-    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
-    stop = {squash(s) for s in cat.get("stoplist", [])}
+    aliases, entries, stop = catalog_maps(catalog)
     kept: dict[str, dict] = {}
     for r in resources:
         if not isinstance(r, dict):
@@ -2538,9 +2537,16 @@ def chat_reply(message: str, history: list[dict], max_notes: int = 4) -> tuple[s
 
 CLAIMED_ACTION_RE = re.compile(
     r"\bI(?:'ve| have|'ll| will)?\s+(?:just\s+|now\s+|already\s+)?(?:marked|ticked|checked off|"
-    r"completed|skipped|deleted|removed|added|updated|changed|set|moved|saved)\b", re.I)
-NO_CHAT_ACTIONS = ("I can't change tasks or notes from a chat reply. To tick one off, say "
-                   "\"I finished the <task name>\" and press the button, or send /todo, then /done 2.")
+    r"completed|skipped|deleted|removed|added|updated|changed|set|moved|saved)\b"    # "I've marked it"
+    r"|\b(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:marked|ticked|checked off|completed|"
+    r"skipped|deleted|removed)\b"                                                     # "it has been completed"
+    r"|\b(?:is|are|has been|have been) now done\b|\b(?:has|have) been done\b"         # "it is now done"
+    r"|(?:^|[.!?]\s+)done!|\ball set\b", re.I | re.M)                                 # "Done!" (not "Well done!")
+NO_CHAT_ACTIONS = "I can't change tasks in chat. Try: I finished <task>, or /done."
+# messages without one of these words never ask the AI for an intent (saves one AI call per chat)
+TASK_HINT_RE = re.compile(
+    r"\b(?:finish|finished|complete|completed|done|did|tick|ticked|mark|marked|skip|todo|to-do|list|"
+    r"stats|find|show|open|tools?|dupes?|twice)\b", re.I)
 CHAT_INTENTS = ("done", "skip", "todo", "stats", "find_note", "show_note", "dupes", "tools", "chat")
 INTENT_PROMPT = """You sort one message sent to my notes bot. Return ONLY JSON:
 {"intent": "...", "words": "..."}
@@ -2567,7 +2573,10 @@ TASK_FILLER = {"task", "tasks", "action", "item", "one", "thing", "todo", "finis
 
 
 def detect_intent(message: str) -> dict:
-    """{'intent': one of CHAT_INTENTS, 'words': '...'} from the local model. Unsure -> 'chat'."""
+    """{'intent': one of CHAT_INTENTS, 'words': '...'} from the local model. Unsure -> 'chat'.
+    A message with no task or command word is chat, with no AI call."""
+    if not TASK_HINT_RE.search(message):
+        return {"intent": "chat", "words": ""}
     data = ask_ollama_json(INTENT_PROMPT.replace("<<MESSAGE>>", message), schema=INTENT_SCHEMA)
     intent = str(data.get("intent", "")).strip().lower()
     return {"intent": intent if intent in CHAT_INTENTS else "chat", "words": text_of(data.get("words"))}

@@ -110,7 +110,7 @@ def test_show_my_todo_list_runs_the_todo_command(notes, monkeypatch):
 def test_other_command_intents(notes, monkeypatch, intent, expected):
     ai_says(monkeypatch, intent)
     chat = Chat()
-    chat.send("anything")
+    chat.send("show my stats" if intent == "stats" else "any dupes?")
     assert chat.replies[0][0] == expected()
 
 
@@ -178,7 +178,7 @@ def test_fuzzy_match_on_a_typo(notes):
 
 def test_odd_intent_from_the_model_is_chat(monkeypatch):
     monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, **k: {"intent": "delete_everything", "words": 3})
-    assert p.detect_intent("delete all my notes") == {"intent": "chat", "words": "3"}
+    assert p.detect_intent("show me everything") == {"intent": "chat", "words": "3"}
 
 
 def test_chat_reply_never_claims_an_action(notes, monkeypatch):
@@ -186,11 +186,36 @@ def test_chat_reply_never_claims_an_action(notes, monkeypatch):
     def fake_post(url, json, timeout):
         sent["system"] = json["messages"][0]["content"]
         return types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
-            "message": {"content": "Great job! I've marked the Hallmark task as done."}})
+            "message": {"content": sent["reply"]}})
     monkeypatch.setattr(p.requests, "post", fake_post)
-    reply, _ = p.chat_reply("well done me", [])
+    for claim in ("Great job! I've marked the Hallmark task as done.", "Your task has been completed.",
+                  "The Hallmark task is marked.", "It has been ticked off.", "That one is now done.",
+                  "Done! Nice work.", "You're all set."):
+        sent["reply"] = claim
+        reply, _ = p.chat_reply("well done me", [])
+        assert reply == "I can't change tasks in chat. Try: I finished <task>, or /done.", claim
     assert "never say you marked" in sent["system"].lower().replace("\n  ", " ")
-    assert reply == p.NO_CHAT_ACTIONS and "marked" not in reply
+
+
+@pytest.mark.parametrize("reply", [
+    "Well done! Strix scans code for security bugs.", "The note says Strix is open source.",
+    "You can mark it with /done 2."])
+def test_normal_replies_are_not_taken_as_claims(reply):
+    assert not p.CLAIMED_ACTION_RE.search(reply)
+
+
+@pytest.mark.parametrize("message,asks_ai", [
+    ("hello", False), ("what is Strix used for?", False), ("thanks!", False),
+    ("I finished the Hallmark task", True), ("I have completed it", True), ("skip the BLA one", True),
+    ("show my todo list", True), ("what tools do I have", True), ("how did I do this week?", True),
+    ("which videos did I save twice", True)])
+def test_intent_ai_is_only_asked_when_a_task_word_is_there(monkeypatch, message, asks_ai):
+    calls = []
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, **k: calls.append(1) or {"intent": "todo"})
+    result = p.detect_intent(message)
+    assert bool(calls) is asks_ai
+    if not asks_ai:
+        assert result == {"intent": "chat", "words": ""}
 
 
 def test_normal_chat_still_works_and_changes_nothing(notes, monkeypatch):

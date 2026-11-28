@@ -16,8 +16,17 @@ Last updated: 2026-11-28
   reply that claims it changed something.
 - Step 4: tests/test_chat_sim.py (AI mocked): all scenarios, sandbox paths restored, failures found,
   links skipped, network blocked, missing button. Tests: 648 passed.
-- Step 6: real run with local qwen3:8b on sample notes: 6 of 6 scenarios pass.
 - Step 5: CLAUDE.md: run the simulator after changing chat or intent code.
+- Step 6: real run with local qwen3:8b on sample notes: 6 of 6 scenarios pass.
+- Step 7: audit fixes.
+  - `detect_intent` asks the AI only when the message has a task or command word (finish, done, did,
+    skip, todo, list, stats, find, show, open, tools, dupe, twice...). "hello" makes one AI call, not two.
+  - The claim guard also catches passive and short claims ("has been completed", "is marked",
+    "is now done", "Done!", "all set"; "Well done!" is fine). The reply becomes: "I can't change tasks
+    in chat. Try: I finished <task>, or /done."
+  - New `catalog_maps()`: /tools and new notes build the catalog lookups in one place.
+  - Deleted the unused `process_video`. `normalise_url` runs the Threads check once.
+  - New scenario "I have completed the Hallmark task". Tests: 661 passed. Real run: 7 of 7 pass.
 
 ## Next step
 - Owner: merge feature/chat-actions first, then this branch.
