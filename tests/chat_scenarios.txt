@@ -1,13 +1,21 @@
 # Chat scenarios for tools/chat_sim.py (runs on SAMPLE notes, with the real local Ollama model).
 #   python tools/chat_sim.py --file tests/chat_scenarios.txt
-# Format:  message || expected intent || text the reply must contain || button to press
-# The sample notes have these open actions: "Send a Hallmark card to a friend",
-# "Try the BLA command line", "Run Strix on my repo".
+# Format:  message || expected intent || text the reply must contain || button(s) to press
+# Several buttons in order: "First label >> ✅ Yes, tick it".
+# Sample notes and their open actions (see SAMPLE_NOTES in tools/chat_sim.py):
+#   "Claude Code Makes Premium Websites": Build a landing page with Claude Code  (Hallmark only in Resources)
+#   "BLA command line tool": Try the BLA command line
+#   "Strix security scanner": Run Strix on my repo
+#   "Weekly planning tips": Plan next week on Sunday  (orbit only in the file name)
+#   "Remotion video basics": Make a 10 second intro video  (Remotion in the title)
+#   "Animated captions": Add captions to a reel  (Remotion only in Resources)
 
-I finished the Hallmark task || done || Ticked: Send a Hallmark card to a friend || ✅ Yes, tick it
-I have completed the Hallmark task || done || Ticked: Send a Hallmark card to a friend || ✅ Yes, tick it
+I finished the Hallmark task || done || Ticked: Build a landing page with Claude Code || ✅ Yes, tick it
+I have completed the Hallmark task || done || Ticked: Build a landing page with Claude Code || ✅ Yes, tick it
+I finished the orbit task || done || Ticked: Plan next week on Sunday || ✅ Yes, tick it
+I finished the Remotion task || done || Ticked: Add captions to a reel || Add captions to a reel (Animated captions) >> ✅ Yes, tick it
 skip the BLA one || skip || Skipped: Try the BLA command line || ⏭ Yes, skip it
 show my todo list || todo || Run Strix on my repo
 what tools do I have || tools || Strix
-I finished the guitar practice task || done || couldn't find
+I finished the guitar practice task || done || Is it one of these?
 what is Strix used for? || chat || Strix

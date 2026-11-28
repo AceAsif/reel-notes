@@ -1,29 +1,29 @@
-# Progress - no more empty Action items
-Branch: fix/empty-action-items
+# Progress - chat task matching finds words anywhere in the note
+Branch: fix/chat-task-matching
 Last updated: 2026-11-28
 
 ## Done
-- Step 1: the cause. Only two steps can empty the list: the note prompt allowed `[]` ("Use [] if nothing
-  is worth doing"), and `split_actions` moves "Comment X to get the link" actions to "From the creator".
-  When that was the AI's only action, nothing was left. The claim filter, the unverified-name check and
-  `clean_resources` never touch actions. (The real note was not opened, so which of the two hit is not
-  known for sure.)
-- Step 2: the prompt asks for 1-2 actions and says bait like "comment X" is not an action.
-- Step 3: new `ensure_action` at the end of `summarise`: no action left (and no habit) -> ask the AI once
-  more with the title, summary and main resource. Still none -> "Try <main resource>: <link>", or
-  "Review this note" with no resource. It logs a warning and the Telegram reply says
-  "⚠️ No action found, added a default".
-- Step 4: new `drop_link_borrowers`: when two resources share one link, a name the video never said
-  ("Relay Example" on screen, pointing at the Hallmark repo) is dropped.
-- Step 5: new `collapse_repeats` in `transcribe`: a transcript said twice word for word, or one sentence
-  repeated many times in a row, is kept once. Short real repeats ("no no no") stay.
-- Step 6: tests for each case (bait-only action, retry, fallback with and without a resource, AI down,
-  habit note, shared link, repeated transcript, Telegram notice). Old notes are not changed.
-  Chat simulator (local qwen3:8b): 7 of 7 pass.
-  Tests: 673 passed.
+- Step 1: the problem. "I have completed the Hallmark task" found nothing: `match_actions` only looked at the
+  action text and the note title, and "Hallmark" was only in a resource link (github.com/Nutlope/hallmark).
+- Step 2: processor.py. `match_actions` now looks at the action text and title (3 points a word), the file
+  name without its date (2), and the summary, tags and resource names and links (1). Small typos still
+  match. Filler words are ignored (the, task, one, I, have, completed, finished, done, skip...).
+  Any match counts; the best come first, up to 5.
+- Step 3: new `closest_actions`: when nothing matches, the 5 open actions most like the words.
+- Step 4: bot.py. One match: "Tick this off?" with Yes / Not this one / Cancel (as before). Several
+  matches (one note or many): one button per action (up to 5) and Cancel. No match: "Is it one of these?"
+  with the 5 closest actions and Cancel. Pressing an action button only shows the Yes / Cancel question
+  for it; a task changes only after "Yes".
+- Step 5: tools/chat_sim.py sample notes: Hallmark only in Resources, "orbit" only in the file name,
+  "Remotion" in two notes. Scenarios can press several buttons ("A >> B"). New scenarios for each.
+- Step 6: tests (resources, file name, summary, tags, ranking, filler words, pick list, one note with two
+  actions, 5 closest + Cancel). Tests: 666 passed. Simulator (local qwen3:8b): 9 of 9 pass.
+
+- Step 7: merged main (PR #39, no more empty Action items). Only PROGRESS.md had a conflict; both
+  logs are kept (main's is in git history).
 
 ## Next step
-- Owner: merge, pull, restart. Send the Hallmark reel again with /redo.
+- Owner: merge, pull, restart. Say "I have completed the Hallmark task".
 
 ## Decisions
-- The retry costs one more AI call, only for notes that would have had no action.
+- An action button asks Yes / Cancel before it ticks, so one wrong tap changes nothing.

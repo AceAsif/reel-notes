@@ -33,11 +33,18 @@ import bot  # noqa: E402  (loads .env the same way the real bot does)
 import processor  # noqa: E402
 
 STATE_FILES = ("STATE_FILE", "CLEANUP_UNDO_FILE", "SENT_JOBS_FILE", "REMINDERS_FILE", "LINK_INDEX_FILE")
-SAMPLE_NOTES = [  # neutral examples only: the repo is public
-    ("Hallmark card ideas", ["Send a Hallmark card to a friend"], []),
-    ("BLA command line tool", ["Try the BLA command line"], [{"name": "BLA", "link": "https://example.com/bla"}]),
+SAMPLE_NOTES = [  # (title, actions, resources, file name or None). Neutral examples: the repo is public.
+    # "Hallmark" is only in a resource link, not in the action or the title
+    ("Claude Code Makes Premium Websites", ["Build a landing page with Claude Code"],
+     [{"name": "hallmark", "link": "https://github.com/Nutlope/hallmark"}], None),
+    ("BLA command line tool", ["Try the BLA command line"], [{"name": "BLA", "link": "https://example.com/bla"}], None),
     ("Strix security scanner", ["Run Strix on my repo"],
-     [{"name": "Strix", "link": "https://github.com/usestrix/strix"}]),
+     [{"name": "Strix", "link": "https://github.com/usestrix/strix"}], None),
+    # "orbit" is only in the file name
+    ("Weekly planning tips", ["Plan next week on Sunday"], [], "2026-01-01_0903_orbit-planner.md"),
+    # "Remotion" is in two notes: one title, one resource
+    ("Remotion video basics", ["Make a 10 second intro video"], [], None),
+    ("Animated captions", ["Add captions to a reel"], [{"name": "Remotion", "link": "https://www.remotion.dev"}], None),
 ]
 
 
@@ -45,12 +52,14 @@ SAMPLE_NOTES = [  # neutral examples only: the repo is public
 
 def write_sample_notes(folder: Path) -> None:
     start = datetime(2026, 1, 1, 9, 0)
-    for n, (title, actions, resources) in enumerate(SAMPLE_NOTES):
+    for n, (title, actions, resources, file_name) in enumerate(SAMPLE_NOTES):
         data = {"title": title, "category": "tech", "summary": f"About {title}.", "key_points": [title],
                 "resources": resources, "tags": ["sample"], "claims": [], "quote": "", "lesson": "",
                 "habit": "", "action_items": processor.clean_actions(actions)}
-        processor.save_note(data, "sample transcript", "sample screen", f"https://example.com/v/{n}",
-                            saved_at=start + timedelta(minutes=n))
+        path = processor.save_note(data, "sample transcript", "sample screen", f"https://example.com/v/{n}",
+                                   saved_at=start + timedelta(minutes=n))
+        if file_name:
+            path.rename(path.with_name(file_name))
 
 
 def fill_notes(folder: Path, real_notes: Path | None) -> None:
@@ -210,7 +219,8 @@ class SimChat:
 
 def parse_scenarios(path: Path) -> list[dict]:
     """One scenario per line:  message || expected intent || text the reply must contain || button to press
-    The last two are optional. Lines starting with # are comments."""
+    The last two are optional. Press several buttons in order with ">>": "First label >> ✅ Yes, tick it".
+    Lines starting with # are comments."""
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -227,7 +237,11 @@ def run_scenario(s: dict, real_notes: Path | None = None) -> dict:
         try:
             chat.send(s["message"])
             buttons = chat.labels()
-            pressed = chat.press(s["press"]) if s.get("press") else None
+            pressed = None
+            for label in [b.strip() for b in s.get("press", "").split(">>") if b.strip()]:
+                pressed = chat.press(label)
+                if not pressed:
+                    break
         finally:
             chat.close()
     intent = chat.intents[0]["intent"] if chat.intents else "(none)"
