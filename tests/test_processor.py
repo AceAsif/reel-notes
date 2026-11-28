@@ -554,7 +554,7 @@ def test_no_github_search_when_video_is_not_about_code(monkeypatch):
     text = "Go to settings and search for DNS. Muse from Meta, Grokbot from X."
     res = p.enrich_with_github([{"name": "Settings"}, {"name": "Muse"}], "tech", text)
     assert called == []
-    assert p.resource_line(res[0], "tech") == "Settings — No repo found"
+    assert p.resource_line(res[0], "tech") == "Settings — No link found"
 
 
 def test_github_search_when_video_mentions_open_source(monkeypatch):
@@ -572,7 +572,7 @@ def test_roadmap_courses_get_no_repo_found(monkeypatch):
     monkeypatch.setattr(p, "find_repo", lambda n, s: {"link": "https://github.com/x/y", "stars": 9})
     res = p.enrich_with_github([{"name": "Python Tutorial"}, {"name": "SQLBolt"},
                                 {"name": "GitHub Skills"}], "programming", ROADMAP)
-    assert all(p.resource_line(r, "programming").endswith("No repo found") for r in res)
+    assert all(p.resource_line(r, "programming").endswith("No link found") for r in res)
 
 
 def test_course_names_skipped_even_for_open_source(monkeypatch):
@@ -766,12 +766,12 @@ def test_link_shown_without_https_is_kept(link, shown):
 def test_not_a_link_says_no_repo_found():
     for bad in ("install it", "Muse", ""):
         line = p.resource_line({"name": "T", "link": bad}, "other")
-        assert line == "T — No repo found" and "search" not in line
+        assert line == "T — No link found" and "search" not in line
 
 
 def test_real_repo_link_kept_without_no_repo_text():
     line = p.resource_line({"name": "B", "link": "https://github.com/a/b"}, "tech")
-    assert "https://github.com/a/b" in line and "No repo found" not in line
+    assert "https://github.com/a/b" in line and "No link found" not in line
 
 
 def test_repo_name_at_end_of_sentence(monkeypatch):
@@ -1278,3 +1278,59 @@ def test_long_tool_list_is_split():
     messages = p.split_messages(lines)
     assert len(messages) > 1 and all(len(m) <= 4000 for m in messages)
     assert "\n".join(messages).splitlines() == lines                          # nothing lost
+
+
+# ---- new notes: resources cleaned with the catalog rules --------------------------------
+
+def test_clean_resources_alias_stoplist_types_and_catalog_link():
+    res = [{"name": "Claw Code", "link": ""}, {"name": "clodcode", "link": "https://made.up/x"},
+           {"name": "react3-fiber", "link": ""}, {"name": "Golden Hour", "link": ""},
+           {"name": "Python", "link": ""}, {"name": "NVIDIA", "link": ""}, {"name": "jobs.xlsx", "link": ""},
+           {"name": "Strix", "link": "strix.ai/docs"}, {"name": "Muse", "link": "https://t.co/abc"}]
+    assert p.clean_resources(res) == [
+        {"name": "Claude Code", "link": "https://github.com/anthropics/claude-code"},  # one line, catalog link
+        {"name": "React Three Fiber", "link": "https://github.com/pmndrs/react-three-fiber"},
+        {"name": "Strix", "link": "https://strix.ai/docs"},                              # shown link kept
+        {"name": "Muse", "link": ""}]                                                    # shortener dropped
+
+
+def test_clean_resources_keeps_unverified_mark_unless_a_twin_was_said():
+    res = [{"name": "Ghost Tool", "link": "", "unverified": True},
+           {"name": "Claw Code", "link": "", "unverified": True}, {"name": "Claude Code", "link": ""}]
+    out = p.clean_resources(res)
+    assert out[0]["unverified"] and "unverified" not in out[1]
+
+
+def summarise_with(monkeypatch, resources, transcript):
+    monkeypatch.setattr(p, "all_tags", lambda: [])
+    monkeypatch.setattr(p, "enrich_with_github", lambda r, c, t: r)       # no network
+    monkeypatch.setattr(p, "ask_ollama_json", lambda prompt, **k: {
+        "title": "T", "category": "tech", "summary": "s", "key_points": [], "tags": [],
+        "action_items": [], "claims": [], "resources": resources})
+    return p.summarise(transcript, "", "")["resources"]
+
+
+def test_new_note_link_kept_only_if_the_video_showed_it(monkeypatch):
+    out = summarise_with(monkeypatch, [{"name": "Strix", "link": "https://usestrix.com"},
+                                       {"name": "Agent Wars", "link": "https://invented.example/x"}],
+                         "try Strix from usestrix.com and Agent Wars")
+    assert out == [{"name": "Strix", "link": "https://usestrix.com"}, {"name": "Agent Wars", "link": ""}]
+    assert p.resource_line(out[1]) == "Agent Wars — No link found"
+
+
+def test_new_note_uses_catalog_name_link_and_marks_invented_names(monkeypatch):
+    out = summarise_with(monkeypatch, [{"name": "clodcode", "link": ""}, {"name": "Blitz Wizard", "link": ""},
+                                       {"name": "Rim Light", "link": ""}],
+                         "open clodcode and add a rim light")
+    assert out == [{"name": "Claude Code", "link": "https://github.com/anthropics/claude-code"},
+                   {"name": "Blitz Wizard", "link": "", "unverified": True}]
+
+
+def test_prompt_asks_for_named_products_only():
+    assert "List only named software, apps," in p.PROMPT and "programming\n  languages" in p.PROMPT
+
+
+def test_tools_reads_new_no_link_found_lines(notes):
+    p.NOTES_DIR.joinpath("a.md").write_text("# A\n\n## Resources\n- Agent Wars — No link found\n",
+                                            encoding="utf-8")
+    assert p.all_tools() == [("Agent Wars", "No repo found", 1, "tool")]

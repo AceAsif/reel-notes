@@ -111,9 +111,11 @@ Return ONLY a JSON object with these keys:
   If the video is a list, a roadmap or a step-by-step guide, keep EVERY step, in the
   same order, one point per step (up to 15). Do not merge steps and do not drop any.
   Bad: "Ask about favorite memories". Good: "Ask: 'What is your favourite memory?'"
-- "resources": list of objects {"name": "...", "link": "..."} for every GitHub repo, tool, website,
-  library or command mentioned. Fix obvious OCR typos. Only use a URL that was actually
-  shown or said; never invent one. Use "" for link otherwise (never "N/A").
+- "resources": list of objects {"name": "...", "link": "..."}. List only named software, apps,
+  AI models and repos. Do not list techniques, companies, courses, generic topics or programming
+  languages. Use the product's own name (e.g. "Claude Code", not "Claude's coding tool").
+  Fix obvious OCR typos. Only use a URL that was actually shown or said; never invent one.
+  Use "" for link otherwise (never "N/A").
 - "action_items": list of 0-2 objects {"text": "...", "priority": "high" | "normal" | "low",
   "type": "ai" | "habit" | "lookup"}.
   Fewer is better: I have little time, so give only the one or two actions that are really
@@ -536,6 +538,8 @@ def summarise(transcript: str, screen: str, caption: str = "") -> dict:
     merge_habit_and_actions(data)             # one idea = one to-do
     data["tags"] = clean_tags(data.get("tags", []))
     data["resources"] = drop_invented_links(data["resources"], transcript + "\n" + screen)
+    data["resources"] = mark_unverified_names(data["resources"], transcript + "\n" + screen)
+    data["resources"] = clean_resources(data["resources"])     # same catalog rules as /tools
     data["resources"] = enrich_with_github(data["resources"], data["category"],
                                            transcript + "\n" + screen)
     return data
@@ -747,7 +751,7 @@ def resource_line(r, category: str = "") -> str:
     if link and not link.lower().startswith("http") and BARE_DOMAIN_RE.match(link):
         link = "https://" + link                  # 'strix.ai/docs' is a real link
     if not link.lower().startswith("http"):
-        link = "— No repo found"                 # no search link: it often led to the wrong thing
+        link = "— No link found"                 # no search link: it often led to the wrong thing
     if r.get("unverified"):
         name += " (unverified)"
     line = f"{name} {link}".strip()
@@ -1538,7 +1542,7 @@ def notes_with_tag(tag: str) -> list[Path]:
     return sorted(hits, reverse=True)
 
 
-TOOL_LINE_RE = re.compile(r"- (.+?)(?: (https?://\S+)| — No repo found|$)")
+TOOL_LINE_RE = re.compile(r"- (.+?)(?: (https?://\S+)| — No (?:repo|link) found|$)")
 
 
 TOOL_CATALOG_FILE = Path(__file__).with_name("tool_catalog.json")
@@ -1629,6 +1633,38 @@ def clean_tools(raw: list[tuple[str, str, str]], catalog: dict | None = None) ->
         link = info.get("link") or (good[0] if good else "")
         tools.append((name, link or "No repo found", len(g["notes"]), info.get("type") or tool_type(name, link)))
     return sorted(tools, key=lambda t: (-t[2], t[0].lower()))
+
+
+def clean_resources(resources: list, catalog: dict | None = None) -> list:
+    """A new note's resources, cleaned with the /tools catalog rules: alias -> one name, stoplist,
+    file names and non-tool types (company, course, language...) dropped, the catalog link used.
+    Any other link must already be one the video showed (drop_invented_links runs first)."""
+    cat = catalog if catalog is not None else load_tool_catalog()
+    aliases = {squash(k): v for k, v in cat.get("aliases", {}).items()}
+    entries = {squash(k): (k, v) for k, v in cat.get("entries", {}).items()}
+    stop = {squash(s) for s in cat.get("stoplist", [])}
+    kept: dict[str, dict] = {}
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("name", "")).replace("�", "").strip()
+        name = aliases.get(squash(name), name)
+        key = squash(name)
+        if not key or key in stop or FILE_NAME_RE.search(name):
+            continue
+        name, info = entries.get(key, (name, {}))
+        if info.get("type", "tool") not in TOOL_TYPES_SHOWN:
+            continue
+        link = str(r.get("link", "")).strip()
+        if link and not link.lower().startswith("http") and BARE_DOMAIN_RE.match(link):
+            link = "https://" + link                  # 'strix.ai/docs' shown on screen
+        link = info.get("link") or (link if tool_link_ok(link) else "")
+        if key in kept:                               # 'Claw Code' and 'Claude Code': one line
+            kept[key]["link"] = kept[key]["link"] or link
+            kept[key]["unverified"] = kept[key].get("unverified") and r.get("unverified")
+            continue
+        kept[key] = {**r, "name": name, "link": link}
+    return [{k: v for k, v in r.items() if k != "unverified" or v} for r in kept.values()]
 
 
 def raw_tools() -> list[tuple[str, str, str]]:
