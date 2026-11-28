@@ -14,7 +14,10 @@ Last updated: 2026-11-28
 - Step 5: audit fix. Reminders, bot state, sent jobs and cleanup undo now save through write_json_atomic,
   so a power cut cannot leave half a file (which loaded as empty and wiped reminders).
 - Step 6: smoke test on real Ollama: 175 notes in 15 s, 2.5 MB. Small words (STOPWORDS) no longer count in
-  the exact-word score; "how to stay motivated" now finds the habit notes. Tests: 693 passed.
+  the exact-word score; "how to stay motivated" now finds the habit notes.
+- Step 7: meaning scores min-max scaled before mixing; "free" and "ai" skipped in exact words; a note
+  is re-read only when mtime or size changes (title kept in the index); keep_alive 30m. Real eval
+  (3 local queries, not in git): top-3 hits 2/3 -> 3/3, search 4.7 s -> 2.5 s. Tests: 696 passed.
 
 ## Next step
 - PR 2: call sync after save, /redo and cleanup. PR 3: /search command. PR 4: chat.
