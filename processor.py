@@ -2569,7 +2569,11 @@ INTENT_SCHEMA = {"type": "object", "properties": {"intent": {"type": "string", "
                  "required": ["intent", "words"]}
 # words that say what to do, not which task it is
 TASK_FILLER = {"task", "tasks", "action", "item", "one", "thing", "todo", "finish", "finished", "done",
-               "skip", "complete", "completed", "mark", "tick", "drop", "note", "please"}
+               "skip", "complete", "completed", "mark", "tick", "drop", "note", "please", "the", "i",
+               "have", "has", "had", "just", "finally", "with", "a", "an", "my"}
+# where a word is found: in the action or title it counts most, in the rest of the note least
+MATCH_WEIGHTS = {"action": 3, "title": 3, "file": 2, "note": 1}
+CHAT_PICK_LIMIT = 5
 
 
 def detect_intent(message: str) -> dict:
@@ -2588,23 +2592,51 @@ def _word_hit(word: str, targets: set[str]) -> bool:
         len(t) >= 4 and difflib.SequenceMatcher(None, word, t).ratio() >= 0.85 for t in targets)
 
 
-def match_actions(words: str, limit: int = 3) -> list[dict]:
-    """Open actions that best match the words, best first, by action text and note title.
-    Up to `limit` actions that share at least half of the words come back, so the user can
-    step through them with "Not this one"."""
-    query = {w for w in idea_words(words) if w not in TASK_FILLER} or {
-        w.lower() for w in re.findall(r"[A-Za-z0-9]{2,}", words) if w.lower() not in TASK_FILLER}
+def _match_words(text: str) -> set[str]:
+    return idea_words(text) | {w.lower() for w in re.findall(r"[A-Za-z0-9]{2,}", text or "")}
+
+
+def _query_words(words: str) -> set[str]:
+    return {w for w in _match_words(words) if w not in TASK_FILLER and w not in STOPWORDS}
+
+
+def _note_match_fields(path: Path) -> dict[str, set[str]]:
+    """Words of a note's file name, and of its summary, tags and resources (names and links)."""
+    s = note_sections(path)
+    file_name = re.sub(r"^\d{4}-\d{2}-\d{2}_\d{4}_", "", path.stem)        # drop the date part
+    rest = " ".join(s.get("Summary", []) + s.get("Resources", []) + read_tags(path))
+    return {"file": _match_words(file_name.replace("-", " ").replace("_", " ")), "note": _match_words(rest)}
+
+
+def match_actions(words: str, limit: int = CHAT_PICK_LIMIT) -> list[dict]:
+    """Open actions that match the words, best first. A word found in the action text or the
+    note title counts most, then the file name, then the summary, tags or resources
+    ("Hallmark" may only be in a resource link like github.com/Nutlope/hallmark)."""
+    query = _query_words(words)
     if not query:
         return []
+    notes: dict[Path, dict] = {}
     scored = []
     for a in open_actions():
-        targets = idea_words(a["action"]) | idea_words(a["title"]) | {
-            w.lower() for w in re.findall(r"[A-Za-z0-9]{2,}", a["action"] + " " + a["title"])}
-        score = sum(_word_hit(w, targets) for w in query) / len(query)
-        if score >= 0.5:
+        fields = {"action": _match_words(a["action"]), "title": _match_words(a["title"]),
+                  **notes.setdefault(a["path"], _note_match_fields(a["path"]))}
+        score = sum(max((MATCH_WEIGHTS[f] for f, t in fields.items() if _word_hit(w, t)), default=0)
+                    for w in query)
+        if score:
             scored.append((score, a))
     scored.sort(key=lambda s: -s[0])                 # stable: /todo order inside one score
     return [a for _, a in scored[:limit]]
+
+
+def closest_actions(words: str, limit: int = CHAT_PICK_LIMIT) -> list[dict]:
+    """When nothing matches: the open actions whose text looks most like the words."""
+    query = " ".join(sorted(_query_words(words)))
+    actions = open_actions()
+    if not query:
+        return actions[:limit]
+    def likeness(a):
+        return difflib.SequenceMatcher(None, query, f"{a['action']} {a['title']}".lower()).ratio()
+    return sorted(actions, key=likeness, reverse=True)[:limit]
 
 
 # ---- /plan: turn a note into a ready-to-paste prompt for Claude ---------------

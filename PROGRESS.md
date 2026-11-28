@@ -1,35 +1,26 @@
-# Progress - local chat simulator
-Branch: feature/chat-sim (built on feature/chat-actions, which is not merged yet)
+# Progress - chat task matching finds words anywhere in the note
+Branch: fix/chat-task-matching
 Last updated: 2026-11-28
 
 ## Done
-- Step 1: tools/chat_sim.py. A message is routed by the real `bot.build_app()` handlers (the same
-  handler Telegram would pick) and run with fake message objects. It prints the detected intent, the
-  reply and the button labels. `--press "<label>"` presses a button. `--file` runs scenarios and prints
-  a pass/fail table (exit code 1 if any fail).
-- Step 2: safety. Each scenario gets a new temp folder with SAMPLE notes (no private note text is
-  printed). All notes folders and state files point into it, are checked before anything runs, and are
-  put back after. Only the local Ollama URL may be called; GitHub, Telegram and anything else is
-  blocked. Links are not downloaded. `--copy-real-notes` (owner only) uses a temp COPY of the real notes.
-- Step 3: tests/chat_scenarios.txt (Hallmark done, BLA skip, todo list, tools, no match, a question).
-  A scenario fails on a wrong intent, missing reply text, a button that can't be pressed, or a chat
-  reply that claims it changed something.
-- Step 4: tests/test_chat_sim.py (AI mocked): all scenarios, sandbox paths restored, failures found,
-  links skipped, network blocked, missing button. Tests: 648 passed.
-- Step 5: CLAUDE.md: run the simulator after changing chat or intent code.
-- Step 6: real run with local qwen3:8b on sample notes: 6 of 6 scenarios pass.
-- Step 7: audit fixes.
-  - `detect_intent` asks the AI only when the message has a task or command word (finish, done, did,
-    skip, todo, list, stats, find, show, open, tools, dupe, twice...). "hello" makes one AI call, not two.
-  - The claim guard also catches passive and short claims ("has been completed", "is marked",
-    "is now done", "Done!", "all set"; "Well done!" is fine). The reply becomes: "I can't change tasks
-    in chat. Try: I finished <task>, or /done."
-  - New `catalog_maps()`: /tools and new notes build the catalog lookups in one place.
-  - Deleted the unused `process_video`. `normalise_url` runs the Threads check once.
-  - New scenario "I have completed the Hallmark task". Tests: 661 passed. Real run: 7 of 7 pass.
+- Step 1: the problem. "I have completed the Hallmark task" found nothing: `match_actions` only looked at the
+  action text and the note title, and "Hallmark" was only in a resource link (github.com/Nutlope/hallmark).
+- Step 2: processor.py. `match_actions` now looks at the action text and title (3 points a word), the file
+  name without its date (2), and the summary, tags and resource names and links (1). Small typos still
+  match. Filler words are ignored (the, task, one, I, have, completed, finished, done, skip...).
+  Any match counts; the best come first, up to 5.
+- Step 3: new `closest_actions`: when nothing matches, the 5 open actions most like the words.
+- Step 4: bot.py. One match: "Tick this off?" with Yes / Not this one / Cancel (as before). Several
+  matches (one note or many): one button per action (up to 5) and Cancel. No match: "Is it one of these?"
+  with the 5 closest actions and Cancel. Pressing an action button only shows the Yes / Cancel question
+  for it; a task changes only after "Yes".
+- Step 5: tools/chat_sim.py sample notes: Hallmark only in Resources, "orbit" only in the file name,
+  "Remotion" in two notes. Scenarios can press several buttons ("A >> B"). New scenarios for each.
+- Step 6: tests (resources, file name, summary, tags, ranking, filler words, pick list, one note with two
+  actions, 5 closest + Cancel). Tests: 666 passed. Simulator (local qwen3:8b): 9 of 9 pass.
 
 ## Next step
-- Owner: merge feature/chat-actions first, then this branch.
+- Owner: merge, pull, restart. Say "I have completed the Hallmark task".
 
 ## Decisions
-- Sample notes by default, because CLAUDE.md says Claude Code must never read the real notes.
+- An action button asks Yes / Cancel before it ticks, so one wrong tap changes nothing.
