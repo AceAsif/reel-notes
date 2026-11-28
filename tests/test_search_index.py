@@ -74,6 +74,23 @@ def test_new_model_or_broken_file_rebuilds(notes, monkeypatch):
     assert len(calls) == 3
 
 
+def test_first_build_keeps_progress_when_a_batch_fails(notes, monkeypatch):
+    folder, calls = notes
+    for i in range(40):
+        write(folder, f"2026-11-{i:02d} n.md", f"Note {i}", "coding")
+    ok = fake_embed(calls)
+
+    def second_fails(texts, prefix):
+        if calls:
+            raise requests.Timeout("slow")
+        return ok(texts, prefix)
+    monkeypatch.setattr(p, "embed", second_fails)
+    with pytest.raises(requests.Timeout):
+        p.sync_search_index()
+    saved = json.loads(p.SEARCH_INDEX_FILE.read_text(encoding="utf-8"))
+    assert len(saved["notes"]) == 32
+
+
 def test_save_is_atomic(notes, monkeypatch):
     folder, _ = notes
     write(folder, "2026-11-01 a.md", "Pasta", "A recipe")

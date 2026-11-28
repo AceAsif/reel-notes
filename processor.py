@@ -1942,11 +1942,15 @@ def sync_search_index() -> dict:
             notes[path.name] = entry
         else:
             todo.append((path.name, digest, text))
-    if todo:
-        vectors = embed([t for _, _, t in todo], "search_document: ")
-        for (name, digest, _), vec in zip(todo, vectors):
-            notes[name] = {"hash": digest, "vector": vec}
-    if todo or notes.keys() != old.keys():
+    # batches, each saved, so a slow first build keeps its progress if a request times out
+    batches = [todo[i:i + 32] for i in range(0, len(todo), 32)]
+    if not batches and notes.keys() != old.keys():
+        batches = [[]]                           # only deletions: save once
+    for batch in batches:
+        if batch:
+            vectors = embed([t for _, _, t in batch], "search_document: ")
+            for (name, digest, _), vec in zip(batch, vectors):
+                notes[name] = {"hash": digest, "vector": vec}
         data["notes"] = notes
         try:
             write_json_atomic(SEARCH_INDEX_FILE, data)
